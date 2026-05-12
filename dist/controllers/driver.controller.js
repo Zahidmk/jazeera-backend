@@ -1,0 +1,808 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.endShift = exports.startShift = exports.getShiftSummary = exports.addLead = exports.searchCustomers = exports.adjustStock = exports.getVanInventory = exports.confirmStockLoad = exports.deleteStockQueueItem = exports.updateStockQueueItem = exports.getStockQueue = exports.scanStock = exports.updateDeliveryStatus = exports.getDeliveryNavigation = exports.getDeliveryById = exports.getDeliveries = exports.getRoute = exports.getHome = void 0;
+const prisma_1 = __importDefault(require("../utils/prisma"));
+const odoo_service_1 = __importDefault(require("../services/odoo/odoo.service"));
+// ─── GET /api/v1/driver/home ─────────────────────────────────────────────────
+const getHome = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const [driver, deliveries, vanInventory] = await Promise.all([
+            prisma_1.default.user.findUnique({
+                where: { id: driverId },
+                select: { id: true, name: true, van: { select: { plateNumber: true } } },
+            }),
+            prisma_1.default.delivery.findMany({
+                where: { driverId, status: { in: ['PENDING', 'IN_PROGRESS'] } },
+                select: { id: true, status: true },
+            }),
+            prisma_1.default.vanInventory.aggregate({
+                where: { van: { driverId } },
+                _sum: { quantity: true },
+            }),
+        ]);
+        const totalDeliveries = deliveries.length;
+        const pendingDeliveries = deliveries.filter(d => d.status === 'PENDING').length;
+        const completedDeliveries = deliveries.filter(d => d.status === 'IN_PROGRESS').length;
+        res.json({
+            success: true,
+            data: {
+                driver: {
+                    name: driver?.name,
+                    van: driver?.van?.plateNumber ?? 'Not Assigned',
+                },
+                stats: {
+                    totalDeliveries,
+                    pendingDeliveries,
+                    completedDeliveries,
+                    totalStockItems: vanInventory._sum.quantity ?? 0,
+                },
+            },
+        });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to get home data' });
+    }
+};
+exports.getHome = getHome;
+// ─── GET /api/v1/driver/route ─────────────────────────────────────────────────
+const getRoute = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const deliveries = await prisma_1.default.delivery.findMany({
+            where: { driverId, status: { in: ['PENDING', 'IN_PROGRESS'] } },
+            include: {
+                customer: { select: { id: true, name: true, phone: true, address: true, lat: true, lng: true } },
+                items: { include: { product: { select: { name: true, sku: true } } } },
+            },
+            orderBy: { scheduledAt: 'asc' },
+        });
+        res.json({
+            success: true,
+            data: {
+                stops: deliveries.map((d, index) => ({
+                    stopNumber: index + 1,
+                    deliveryId: d.id,
+                    status: d.status,
+                    customer: d.customer,
+                    scheduledAt: d.scheduledAt,
+                    itemCount: d.items.length,
+                })),
+            },
+        });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to get route data' });
+    }
+};
+exports.getRoute = getRoute;
+// ─── GET /api/v1/driver/deliveries ───────────────────────────────────────────
+const getDeliveries = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const { status, date } = req.query;
+        const where = { driverId };
+        if (status)
+            where.status = status;
+        if (date) {
+            const day = new Date(date);
+            const nextDay = new Date(day);
+            nextDay.setDate(day.getDate() + 1);
+            where.scheduledAt = { gte: day, lt: nextDay };
+        }
+        const deliveries = await prisma_1.default.delivery.findMany({
+            where,
+            include: {
+                customer: { select: { id: true, name: true, phone: true, address: true, lat: true, lng: true } },
+                items: {
+                    include: {
+                        product: { select: { id: true, name: true, sku: true, unit: true } },
+                    },
+                },
+            },
+            orderBy: { scheduledAt: 'asc' },
+        });
+        res.json({ success: true, data: deliveries });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to get deliveries' });
+    }
+};
+exports.getDeliveries = getDeliveries;
+// ─── GET /api/v1/driver/deliveries/:id ───────────────────────────────────────
+const getDeliveryById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const driverId = req.user.userId;
+        const delivery = await prisma_1.default.delivery.findFirst({
+            where: { id, driverId },
+            include: {
+                customer: true,
+                items: { include: { product: true } },
+                route: { select: { name: true, area: true } },
+            },
+        });
+        if (!delivery) {
+            res.status(404).json({ success: false, error: 'Delivery not found' });
+            return;
+        }
+        res.json({ success: true, data: delivery });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to get delivery' });
+    }
+};
+exports.getDeliveryById = getDeliveryById;
+// ─── GET /api/v1/driver/deliveries/:id/navigate ──────────────────────────────
+const getDeliveryNavigation = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const driverId = req.user.userId;
+        const delivery = await prisma_1.default.delivery.findFirst({
+            where: { id, driverId },
+            include: {
+                customer: { select: { name: true, address: true, lat: true, lng: true, phone: true } },
+            },
+        });
+        if (!delivery) {
+            res.status(404).json({ success: false, error: 'Delivery not found' });
+            return;
+        }
+        const { customer } = delivery;
+        if (!customer.lat || !customer.lng) {
+            res.status(404).json({
+                success: false,
+                error: 'No location data available for this customer. Contact admin to update the shop location in Odoo.',
+            });
+            return;
+        }
+        // Google Maps navigation URL — opens native Maps app on the device
+        const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${customer.lat},${customer.lng}&travelmode=driving`;
+        // Apple Maps fallback (iOS)
+        const appleMapsUrl = `http://maps.apple.com/?daddr=${customer.lat},${customer.lng}&dirflg=d`;
+        // Waze fallback
+        const wazeUrl = `https://waze.com/ul?ll=${customer.lat},${customer.lng}&navigate=yes`;
+        res.json({
+            success: true,
+            data: {
+                customer: {
+                    name: customer.name,
+                    address: customer.address,
+                    phone: customer.phone,
+                    latitude: customer.lat,
+                    longitude: customer.lng,
+                },
+                navigationUrls: {
+                    googleMaps: googleMapsUrl,
+                    appleMaps: appleMapsUrl,
+                    waze: wazeUrl,
+                },
+            },
+        });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to get navigation data' });
+    }
+};
+exports.getDeliveryNavigation = getDeliveryNavigation;
+// ─── PATCH /api/v1/driver/deliveries/:id/status ──────────────────────────────
+const updateDeliveryStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const driverId = req.user.userId;
+        const { status, notes, failReason } = req.body;
+        const validStatuses = ['IN_PROGRESS', 'DELIVERED', 'FAILED', 'RETURNED'];
+        if (!validStatuses.includes(status)) {
+            res.status(400).json({ success: false, error: `Status must be one of: ${validStatuses.join(', ')}` });
+            return;
+        }
+        const delivery = await prisma_1.default.delivery.findFirst({
+            where: { id, driverId },
+            include: { items: true },
+        });
+        if (!delivery) {
+            res.status(404).json({ success: false, error: 'Delivery not found' });
+            return;
+        }
+        // Only deduct van stock when transitioning TO DELIVERED (not on re-update)
+        const isNewlyDelivered = status === 'DELIVERED' && delivery.status !== 'DELIVERED';
+        let updated;
+        if (isNewlyDelivered && delivery.items.length > 0) {
+            // Get the driver's van
+            const van = await prisma_1.default.van.findFirst({ where: { driverId } });
+            updated = await prisma_1.default.$transaction(async (tx) => {
+                const result = await tx.delivery.update({
+                    where: { id },
+                    data: {
+                        status,
+                        notes: notes ?? delivery.notes,
+                        failReason: failReason ?? delivery.failReason,
+                        deliveredAt: new Date(),
+                    },
+                });
+                // Deduct each delivered item from van inventory
+                if (van) {
+                    for (const item of delivery.items) {
+                        await tx.vanInventory.updateMany({
+                            where: { vanId: van.id, productId: item.productId },
+                            data: { quantity: { decrement: item.quantity } },
+                        });
+                    }
+                    console.log(`📦 Van inventory updated: deducted ${delivery.items.length} product(s) for delivery ${id}`);
+                }
+                return result;
+            });
+        }
+        else {
+            updated = await prisma_1.default.delivery.update({
+                where: { id },
+                data: {
+                    status,
+                    notes: notes ?? delivery.notes,
+                    failReason: failReason ?? delivery.failReason,
+                    deliveredAt: status === 'DELIVERED' ? new Date() : delivery.deliveredAt,
+                },
+            });
+        }
+        // ── Push status to Odoo if linked to an Odoo order (fire-and-forget)
+        if (delivery.odooOrderId && (status === 'DELIVERED' || status === 'FAILED')) {
+            pushDeliveryStatusToOdoo(delivery.odooOrderId, status, notes).catch((err) => console.error(`⚠️  Failed to update Odoo order ${delivery.odooOrderId}:`, err?.message));
+        }
+        res.json({ success: true, data: updated });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to update delivery status' });
+    }
+};
+exports.updateDeliveryStatus = updateDeliveryStatus;
+/**
+ * Push delivery status to Odoo:
+ * - DELIVERED: validate the outgoing stock.picking (deducts van inventory in Odoo)
+ * - FAILED:    cancel the sale order
+ */
+async function pushDeliveryStatusToOdoo(odooOrderId, status, notes) {
+    if (status === 'DELIVERED') {
+        // Validate the outgoing delivery picking — this deducts stock from Odoo
+        await odoo_service_1.default.validateDeliveryForSaleOrder(odooOrderId);
+        console.log(`✅ Odoo: Delivery picking validated for SO ${odooOrderId}`);
+    }
+    else if (status === 'FAILED') {
+        // Cancel the sale order
+        await odoo_service_1.default.updateSaleOrderStatus(odooOrderId, 'FAILED', notes);
+        console.log(`✅ Odoo: SO ${odooOrderId} cancelled (delivery failed)`);
+    }
+}
+// ─── POST /api/v1/driver/stock/scan ──────────────────────────────────────────
+const scanStock = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const { barcode, sku, quantity } = req.body;
+        if (!quantity || quantity < 1) {
+            res.status(400).json({ success: false, error: 'Quantity must be at least 1' });
+            return;
+        }
+        const product = await prisma_1.default.product.findFirst({
+            where: {
+                OR: [
+                    { barcode: barcode ?? undefined },
+                    { sku: sku ?? undefined },
+                ],
+                isActive: true,
+            },
+        });
+        if (!product) {
+            res.status(404).json({ success: false, error: 'Product not found for this barcode/SKU' });
+            return;
+        }
+        // Get active shift
+        const shift = await prisma_1.default.shift.findFirst({
+            where: { driverId, status: 'ACTIVE' },
+            orderBy: { startedAt: 'desc' },
+        });
+        if (!shift) {
+            res.status(400).json({ success: false, error: 'No active shift found. Please start a shift first.' });
+            return;
+        }
+        // Upsert into stock load queue
+        const queueItem = await prisma_1.default.stockLoadQueue.upsert({
+            where: { shiftId_productId: { shiftId: shift.id, productId: product.id } },
+            update: { quantity: { increment: quantity } },
+            create: { shiftId: shift.id, productId: product.id, quantity },
+            include: { product: { select: { id: true, name: true, sku: true, unit: true } } },
+        });
+        res.json({ success: true, data: queueItem });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Stock scan failed' });
+    }
+};
+exports.scanStock = scanStock;
+// ─── GET /api/v1/driver/stock/queue ──────────────────────────────────────────
+const getStockQueue = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const shift = await prisma_1.default.shift.findFirst({
+            where: { driverId, status: 'ACTIVE' },
+            orderBy: { startedAt: 'desc' },
+        });
+        if (!shift) {
+            res.json({ success: true, data: [] });
+            return;
+        }
+        const queue = await prisma_1.default.stockLoadQueue.findMany({
+            where: { shiftId: shift.id, confirmed: false },
+            include: { product: { select: { id: true, name: true, sku: true, unit: true, imageUrl: true } } },
+        });
+        res.json({ success: true, data: queue });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to get stock queue' });
+    }
+};
+exports.getStockQueue = getStockQueue;
+// ─── PATCH /api/v1/driver/stock/queue/:id ────────────────────────────────────
+const updateStockQueueItem = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { quantity } = req.body;
+        if (!quantity || quantity < 1) {
+            res.status(400).json({ success: false, error: 'Quantity must be at least 1' });
+            return;
+        }
+        const updated = await prisma_1.default.stockLoadQueue.update({
+            where: { id },
+            data: { quantity },
+            include: { product: { select: { id: true, name: true, sku: true } } },
+        });
+        res.json({ success: true, data: updated });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to update queue item' });
+    }
+};
+exports.updateStockQueueItem = updateStockQueueItem;
+// ─── DELETE /api/v1/driver/stock/queue/:id ───────────────────────────────────
+const deleteStockQueueItem = async (req, res) => {
+    try {
+        const { id } = req.params;
+        await prisma_1.default.stockLoadQueue.delete({ where: { id } });
+        res.json({ success: true, message: 'Item removed from queue' });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to remove queue item' });
+    }
+};
+exports.deleteStockQueueItem = deleteStockQueueItem;
+// ─── POST /api/v1/driver/stock/confirm ───────────────────────────────────────
+const confirmStockLoad = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const shift = await prisma_1.default.shift.findFirst({
+            where: { driverId, status: 'ACTIVE' },
+            orderBy: { startedAt: 'desc' },
+            include: { van: true },
+        });
+        if (!shift || !shift.van) {
+            res.status(400).json({ success: false, error: 'No active shift or van found' });
+            return;
+        }
+        const queueItems = await prisma_1.default.stockLoadQueue.findMany({
+            where: { shiftId: shift.id, confirmed: false },
+            include: { product: { select: { id: true, name: true, odooId: true } } },
+        });
+        if (queueItems.length === 0) {
+            res.status(400).json({ success: false, error: 'No items in queue to confirm' });
+            return;
+        }
+        // Upsert into van inventory and mark queue as confirmed
+        await prisma_1.default.$transaction(async (tx) => {
+            for (const item of queueItems) {
+                await tx.vanInventory.upsert({
+                    where: { vanId_productId: { vanId: shift.vanId, productId: item.productId } },
+                    update: { quantity: { increment: item.quantity } },
+                    create: { vanId: shift.vanId, productId: item.productId, quantity: item.quantity },
+                });
+            }
+            await tx.stockLoadQueue.updateMany({
+                where: { shiftId: shift.id, confirmed: false },
+                data: { confirmed: true },
+            });
+        });
+        res.json({ success: true, message: `${queueItems.length} items loaded into van successfully` });
+        // ── Push to Odoo: create internal transfer warehouse → van location (fire-and-forget)
+        pushVanLoadToOdoo(shift.van, queueItems).catch((err) => console.error('⚠️  Odoo van stock transfer failed (non-blocking):', err?.message));
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to confirm stock load' });
+    }
+};
+exports.confirmStockLoad = confirmStockLoad;
+/**
+ * Push van stock load to Odoo as an internal transfer:
+ * Main Warehouse/Stock → Van Location
+ * Also saves the van's Odoo location ID for future use.
+ */
+async function pushVanLoadToOdoo(van, items) {
+    // Filter to only items that have an Odoo product ID
+    const odooItems = items.filter(i => i.product.odooId != null);
+    if (odooItems.length === 0) {
+        console.warn('⚠️  Odoo van load: no items have odooId — skipping transfer');
+        return;
+    }
+    // 1. Ensure the van has a stock location in Odoo
+    let vanLocationId = van.odooLocationId;
+    if (!vanLocationId) {
+        vanLocationId = await odoo_service_1.default.findOrCreateVanLocation(van.plateNumber);
+        await prisma_1.default.van.update({
+            where: { id: van.id },
+            data: { odooLocationId: vanLocationId },
+        });
+    }
+    // 2. Get the main warehouse stock location
+    const warehouseLocationId = await odoo_service_1.default.getWarehouseStockLocationId();
+    // 3. Create an internal transfer picking
+    const pickingId = await odoo_service_1.default.createStockTransfer(warehouseLocationId, vanLocationId, odooItems.map(i => ({
+        productOdooId: i.product.odooId,
+        quantity: i.quantity,
+        productName: i.product.name,
+    })), `Van load for ${van.plateNumber} — Jazeera mobile app`);
+    // 4. Validate the picking (immediately transfer stock)
+    await odoo_service_1.default.validateStockPicking(pickingId);
+    console.log(`✅ Odoo: Van stock load completed — ${odooItems.length} product(s) transferred to van location ${vanLocationId}`);
+}
+// ─── GET /api/v1/driver/van/inventory ────────────────────────────────────────
+const getVanInventory = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const van = await prisma_1.default.van.findFirst({ where: { driverId } });
+        if (!van) {
+            res.status(404).json({ success: false, error: 'No van assigned to this driver' });
+            return;
+        }
+        const inventory = await prisma_1.default.vanInventory.findMany({
+            where: { vanId: van.id },
+            include: {
+                product: {
+                    select: { id: true, name: true, nameAr: true, sku: true, unit: true, category: true, priceRetail: true, imageUrl: true },
+                },
+            },
+            orderBy: { product: { name: 'asc' } },
+        });
+        res.json({
+            success: true,
+            data: {
+                van: { id: van.id, plateNumber: van.plateNumber },
+                items: inventory.map(i => ({
+                    id: i.id,
+                    quantity: i.quantity,
+                    ...i.product,
+                })),
+                totalItems: inventory.length,
+                totalUnits: inventory.reduce((sum, i) => sum + i.quantity, 0),
+            },
+        });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to get van inventory' });
+    }
+};
+exports.getVanInventory = getVanInventory;
+// ─── POST /api/v1/driver/stock/adjust ────────────────────────────────────────
+const adjustStock = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const { productId, quantity, reason, notes } = req.body;
+        const validReasons = ['DAMAGE', 'EXPIRY', 'THEFT', 'OTHER'];
+        if (!validReasons.includes(reason)) {
+            res.status(400).json({ success: false, error: `Reason must be one of: ${validReasons.join(', ')}` });
+            return;
+        }
+        const van = await prisma_1.default.van.findFirst({ where: { driverId } });
+        if (!van) {
+            res.status(404).json({ success: false, error: 'No van assigned to this driver' });
+            return;
+        }
+        const inventoryItem = await prisma_1.default.vanInventory.findUnique({
+            where: { vanId_productId: { vanId: van.id, productId } },
+        });
+        if (!inventoryItem || inventoryItem.quantity < Math.abs(quantity)) {
+            res.status(400).json({ success: false, error: 'Insufficient stock for this adjustment' });
+            return;
+        }
+        await prisma_1.default.$transaction(async (tx) => {
+            await tx.vanInventory.update({
+                where: { vanId_productId: { vanId: van.id, productId } },
+                data: { quantity: { decrement: Math.abs(quantity) } },
+            });
+            await tx.stockAdjustment.create({
+                data: { driverId, productId, quantity: -Math.abs(quantity), reason, notes },
+            });
+        });
+        // ── Push stock adjustment to Odoo (fire-and-forget) — use van's Odoo location
+        pushAdjustmentToOdoo(van, productId, Math.abs(quantity), reason, notes).catch((err) => console.error('⚠️  Odoo stock adjustment push failed (non-blocking):', err?.message));
+        res.json({ success: true, message: 'Stock adjustment recorded successfully' });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to adjust stock' });
+    }
+};
+exports.adjustStock = adjustStock;
+// ─── GET /api/v1/driver/customers/search?q=xxx ───────────────────────────────
+const searchCustomers = async (req, res) => {
+    try {
+        const q = String(req.query.q || '').trim();
+        const customers = await prisma_1.default.customer.findMany({
+            where: q
+                ? {
+                    OR: [
+                        { name: { contains: q, mode: 'insensitive' } },
+                        { phone: { contains: q, mode: 'insensitive' } },
+                        { address: { contains: q, mode: 'insensitive' } },
+                    ],
+                }
+                : undefined,
+            select: { id: true, name: true, phone: true, address: true },
+            orderBy: { name: 'asc' },
+            take: 30,
+        });
+        res.json({ success: true, data: customers });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to search customers' });
+    }
+};
+exports.searchCustomers = searchCustomers;
+// ─── POST /api/v1/driver/leads ───────────────────────────────────────────────
+const addLead = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const { name, address, notes, latitude, longitude } = req.body;
+        // Accept phone as string OR number (Flutter may send it as a number)
+        const phone = req.body.phone != null ? String(req.body.phone) : undefined;
+        if (!name) {
+            res.status(400).json({ success: false, error: 'Customer name is required' });
+            return;
+        }
+        const lead = await prisma_1.default.lead.create({
+            data: {
+                driverId,
+                name,
+                phone,
+                address,
+                notes,
+                lat: latitude ?? null,
+                lng: longitude ?? null,
+            },
+        });
+        // ── Push to Odoo CRM (fire-and-forget — DB save must not fail if Odoo is down)
+        pushLeadToOdoo(lead.id, { name, phone, street: address, description: notes }).catch((err) => console.error('⚠️  Odoo lead push failed (non-blocking):', err?.message));
+        res.status(201).json({ success: true, data: lead });
+    }
+    catch (err) {
+        console.error('❌ addLead error:', err?.message, err?.code, JSON.stringify(err?.meta));
+        res.status(500).json({ success: false, error: 'Failed to add lead' });
+    }
+};
+exports.addLead = addLead;
+// ─── Helper: push lead to Odoo CRM & save odooLeadId ─────────────────────────
+async function pushLeadToOdoo(leadId, data) {
+    const odooLeadId = await odoo_service_1.default.createLead(data);
+    await prisma_1.default.lead.update({
+        where: { id: leadId },
+        data: { odooLeadId },
+    });
+    console.log(`✅ Lead ${leadId} pushed to Odoo CRM — odooLeadId: ${odooLeadId}`);
+}
+// ─── GET /api/v1/driver/shift/summary ────────────────────────────────────────
+const getShiftSummary = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const shift = await prisma_1.default.shift.findFirst({
+            where: { driverId, status: 'ACTIVE' },
+        });
+        if (!shift) {
+            res.status(400).json({ success: false, error: 'No active shift found' });
+            return;
+        }
+        const [deliveries, cashSales, van] = await Promise.all([
+            prisma_1.default.delivery.groupBy({
+                by: ['status'],
+                where: { driverId },
+                _count: { status: true },
+            }),
+            prisma_1.default.cashSale.aggregate({
+                where: { driverId, createdAt: { gte: shift.startedAt } },
+                _sum: { totalAmount: true },
+                _count: true,
+            }),
+            prisma_1.default.vanInventory.findMany({
+                where: { vanId: shift.vanId },
+                include: { product: { select: { name: true, sku: true } } },
+            }),
+        ]);
+        const deliverySummary = deliveries.reduce((acc, d) => {
+            acc[d.status] = d._count.status;
+            return acc;
+        }, {});
+        res.json({
+            success: true,
+            data: {
+                shiftId: shift.id,
+                startedAt: shift.startedAt,
+                deliveries: deliverySummary,
+                cashSales: {
+                    count: cashSales._count,
+                    totalAmount: cashSales._sum.totalAmount ?? 0,
+                },
+                remainingInventory: van.map(v => ({
+                    product: v.product.name,
+                    sku: v.product.sku,
+                    quantity: v.quantity,
+                })),
+            },
+        });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to get shift summary' });
+    }
+};
+exports.getShiftSummary = getShiftSummary;
+// ─── POST /api/v1/driver/shift/end ───────────────────────────────────────────
+const startShift = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const { vanId } = req.body;
+        if (!vanId) {
+            res.status(400).json({ success: false, error: 'vanId is required' });
+            return;
+        }
+        // Check if driver already has an active shift
+        const existingShift = await prisma_1.default.shift.findFirst({
+            where: { driverId, status: 'ACTIVE' },
+        });
+        if (existingShift) {
+            res.status(400).json({ success: false, error: 'You already have an active shift. Please end it before starting a new one.' });
+            return;
+        }
+        // Verify the van exists
+        const van = await prisma_1.default.van.findUnique({ where: { id: vanId } });
+        if (!van) {
+            res.status(404).json({ success: false, error: 'Van not found' });
+            return;
+        }
+        const shift = await prisma_1.default.shift.create({
+            data: {
+                driverId,
+                vanId,
+                status: 'ACTIVE',
+                startedAt: new Date(),
+            },
+        });
+        res.status(201).json({
+            success: true,
+            data: {
+                shiftId: shift.id,
+                vanId: shift.vanId,
+                startedAt: shift.startedAt,
+                status: shift.status,
+            },
+        });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to start shift' });
+    }
+};
+exports.startShift = startShift;
+const endShift = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const { notes } = req.body;
+        const shift = await prisma_1.default.shift.findFirst({
+            where: { driverId, status: 'ACTIVE' },
+            include: {
+                van: true,
+                stockQueue: { include: { product: { select: { name: true } } } },
+            },
+        });
+        if (!shift) {
+            res.status(400).json({ success: false, error: 'No active shift to end' });
+            return;
+        }
+        // Get end-of-shift summary
+        const [deliveries, cashSales, van] = await Promise.all([
+            prisma_1.default.delivery.groupBy({
+                by: ['status'],
+                where: { driverId },
+                _count: { status: true },
+            }),
+            prisma_1.default.cashSale.aggregate({
+                where: { driverId, createdAt: { gte: shift.startedAt } },
+                _sum: { totalAmount: true },
+                _count: true,
+            }),
+            prisma_1.default.vanInventory.findMany({
+                where: { vanId: shift.vanId },
+                include: { product: { select: { name: true, sku: true } } },
+            }),
+        ]);
+        await prisma_1.default.shift.update({
+            where: { id: shift.id },
+            data: { status: 'ENDED', endedAt: new Date(), notes },
+        });
+        const deliverySummary = deliveries.reduce((acc, d) => {
+            acc[d.status] = d._count.status;
+            return acc;
+        }, {});
+        res.json({
+            success: true,
+            data: {
+                shiftId: shift.id,
+                startedAt: shift.startedAt,
+                endedAt: new Date(),
+                deliveries: deliverySummary,
+                cashSales: {
+                    count: cashSales._count,
+                    totalAmount: cashSales._sum.totalAmount ?? 0,
+                },
+                remainingInventory: van.map(v => ({
+                    product: v.product.name,
+                    sku: v.product.sku,
+                    quantity: v.quantity,
+                })),
+            },
+        });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to end shift' });
+    }
+};
+exports.endShift = endShift;
+// ─── Helper: push stock adjustment to Odoo using van's Odoo location ──────────
+async function pushAdjustmentToOdoo(van, productId, qty, reason, notes) {
+    const product = await prisma_1.default.product.findUnique({
+        where: { id: productId },
+        select: { odooId: true, name: true },
+    });
+    if (!product?.odooId) {
+        console.warn(`⚠️  Product ${productId} has no odooId — skipping Odoo adjustment push`);
+        return;
+    }
+    // Ensure the van has a stock location in Odoo
+    let vanLocationId = van.odooLocationId;
+    if (!vanLocationId) {
+        vanLocationId = await odoo_service_1.default.findOrCreateVanLocation(van.plateNumber);
+        await prisma_1.default.van.update({ where: { id: van.id }, data: { odooLocationId: vanLocationId } });
+    }
+    // Get current van quant quantity and adjust down
+    const quants = await odoo_service_1.default.searchRead('stock.quant', [['product_id', '=', product.odooId], ['location_id', '=', vanLocationId]], ['id', 'quantity'], { limit: 1 });
+    if (quants.length > 0) {
+        const currentQty = quants[0].quantity ?? 0;
+        const newQty = Math.max(0, currentQty - qty);
+        await odoo_service_1.default.createInventoryAdjustment(product.odooId, vanLocationId, newQty, reason);
+        console.log(`✅ Odoo: Stock adjustment for ${product.name} in van location ${vanLocationId} — ${currentQty} → ${newQty} (reason: ${reason})`);
+    }
+    else {
+        console.warn(`⚠️  Odoo: No quant found for product ${product.odooId} in van location ${vanLocationId}`);
+    }
+}
+//# sourceMappingURL=driver.controller.js.map

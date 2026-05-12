@@ -1,0 +1,272 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  MANAGER
+  DRIVER
+  RELAY_REP
+}
+
+enum DeliveryStatus {
+  PENDING
+  IN_PROGRESS
+  DELIVERED
+  FAILED
+  RETURNED
+}
+
+enum SaleType {
+  CASH
+  CREDIT
+}
+
+enum ShiftStatus {
+  ACTIVE
+  ENDED
+}
+
+enum AdjustmentReason {
+  DAMAGE
+  EXPIRY
+  THEFT
+  OTHER
+}
+
+enum LeadStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CONVERTED
+}
+
+// ─── Models ──────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  phone        String?  @unique
+  passwordHash String
+  role         Role     @default(DRIVER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  van         Van?              @relation("VanDriver")
+  shifts      Shift[]
+  deliveries  Delivery[]
+  cashSales   CashSale[]
+  leads       Lead[]
+  adjustments StockAdjustment[]
+}
+
+model Van {
+  id               String   @id @default(uuid())
+  plateNumber      String   @unique
+  model            String?
+  isActive         Boolean  @default(true)
+  odooLocationId   Int?     // Odoo stock.location ID for this van (virtual warehouse)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  driverId  String?        @unique
+  driver    User?          @relation("VanDriver", fields: [driverId], references: [id])
+  inventory VanInventory[]
+  shifts    Shift[]
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  odooId      Int?     @unique
+  sku         String   @unique
+  name        String
+  nameAr      String?
+  category    String?
+  unit        String   @default("pcs")
+  priceRetail Float    @default(0)
+  priceWhole  Float    @default(0)
+  barcode     String?  @unique
+  imageUrl    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  vanInventory  VanInventory[]
+  stockQueue    StockLoadQueue[]
+  deliveryItems DeliveryItem[]
+  cashSaleItems CashSaleItem[]
+  adjustments   StockAdjustment[]
+}
+
+model VanInventory {
+  id        String   @id @default(uuid())
+  vanId     String
+  productId String
+  quantity  Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  van     Van     @relation(fields: [vanId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([vanId, productId])
+}
+
+model Route {
+  id          String   @id @default(uuid())
+  name        String
+  area        String?
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  deliveries Delivery[]
+  shifts     Shift[]
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  odooId    Int?     @unique
+  name      String
+  phone     String?
+  email     String?
+  address   String?
+  lat       Float?
+  lng       Float?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries Delivery[]
+  cashSales  CashSale[]
+  leads      Lead[]
+}
+
+model Shift {
+  id        String      @id @default(uuid())
+  driverId  String
+  vanId     String
+  routeId   String?
+  status    ShiftStatus @default(ACTIVE)
+  startedAt DateTime    @default(now())
+  endedAt   DateTime?
+  notes     String?
+
+  driver     User             @relation(fields: [driverId], references: [id])
+  van        Van              @relation(fields: [vanId], references: [id])
+  route      Route?           @relation(fields: [routeId], references: [id])
+  stockQueue StockLoadQueue[]
+}
+
+model StockLoadQueue {
+  id        String   @id @default(uuid())
+  shiftId   String
+  productId String
+  quantity  Int
+  confirmed Boolean  @default(false)
+  scannedAt DateTime @default(now())
+
+  shift   Shift   @relation(fields: [shiftId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([shiftId, productId])
+}
+
+model Delivery {
+  id          String         @id @default(uuid())
+  driverId    String
+  customerId  String
+  routeId     String?
+  odooOrderId Int?
+  status      DeliveryStatus @default(PENDING)
+  scheduledAt DateTime?
+  deliveredAt DateTime?
+  notes       String?
+  failReason  String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  driver   User           @relation(fields: [driverId], references: [id])
+  customer Customer       @relation(fields: [customerId], references: [id])
+  route    Route?         @relation(fields: [routeId], references: [id])
+  items    DeliveryItem[]
+}
+
+model DeliveryItem {
+  id         String   @id @default(uuid())
+  deliveryId String
+  productId  String
+  quantity   Int
+  unitPrice  Float
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id])
+  product  Product  @relation(fields: [productId], references: [id])
+}
+
+model CashSale {
+  id          String   @id @default(uuid())
+  driverId    String
+  customerId  String?
+  saleType    SaleType @default(CASH)
+  totalAmount Float
+  receiptUrl  String?
+  odooSaleId  Int?
+  latitude    Float?
+  longitude   Float?
+  createdAt   DateTime @default(now())
+
+  driver   User          @relation(fields: [driverId], references: [id])
+  customer Customer?     @relation(fields: [customerId], references: [id])
+  items    CashSaleItem[]
+}
+
+model CashSaleItem {
+  id        String  @id @default(uuid())
+  saleId    String
+  productId String
+  quantity  Int
+  unitPrice Float
+  discount  Float   @default(0)
+
+  sale    CashSale @relation(fields: [saleId], references: [id])
+  product Product  @relation(fields: [productId], references: [id])
+}
+
+model Lead {
+  id         String     @id @default(uuid())
+  driverId   String
+  customerId String?
+  name       String
+  phone      String?
+  address    String?
+  notes      String?
+  lat        Float?
+  lng        Float?
+  status     LeadStatus @default(PENDING)
+  approvedAt DateTime?
+  rejectedAt DateTime?
+  odooLeadId Int?
+  createdAt  DateTime   @default(now())
+
+  driver   User      @relation(fields: [driverId], references: [id])
+  customer Customer? @relation(fields: [customerId], references: [id])
+}
+
+model StockAdjustment {
+  id        String           @id @default(uuid())
+  driverId  String
+  productId String
+  quantity  Int
+  reason    AdjustmentReason
+  notes     String?
+  createdAt DateTime         @default(now())
+
+  driver  User    @relation(fields: [driverId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+}
