@@ -18,6 +18,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.orderQueueEvents = exports.customerQueueEvents = exports.productQueueEvents = exports.orderQueue = exports.customerQueue = exports.productQueue = exports.redisConnection = void 0;
+exports.isRedisAvailable = isRedisAvailable;
 exports.enqueueProductSync = enqueueProductSync;
 exports.enqueueCustomerSync = enqueueCustomerSync;
 exports.enqueueOrderSync = enqueueOrderSync;
@@ -28,9 +29,29 @@ const ioredis_1 = __importDefault(require("ioredis"));
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 exports.redisConnection = new ioredis_1.default(REDIS_URL, {
     maxRetriesPerRequest: null, // Required by BullMQ
+    retryStrategy: (times) => Math.min(times * 50, 2000), // Exponential backoff, max 2s
+    enableReadyCheck: false,
+    enableOfflineQueue: false, // Don't queue commands when offline
+    lazyConnect: true, // Don't connect immediately - let workers handle it
 });
-exports.redisConnection.on('connect', () => console.log('✅ Redis connected'));
-exports.redisConnection.on('error', (err) => console.error('❌ Redis connection error:', err.message));
+let isRedisConnected = false;
+exports.redisConnection.on('connect', () => {
+    console.log('✅ Redis connected');
+    isRedisConnected = true;
+});
+exports.redisConnection.on('error', (err) => {
+    console.error('⚠️  Redis connection error:', err.message);
+    console.warn('⚠️  Queues may not work, but API will continue');
+    isRedisConnected = false;
+});
+// Helper to check Redis status
+function isRedisAvailable() {
+    return isRedisConnected;
+}
+// Try to connect (non-blocking)
+exports.redisConnection.connect().catch(() => {
+    console.warn('⚠️  Could not connect to Redis on startup');
+});
 // ─── Default Job Options ─────────────────────────────────────────────────────
 const defaultJobOptions = {
     attempts: 3,

@@ -21,12 +21,34 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
 export const redisConnection = new IORedis(REDIS_URL, {
   maxRetriesPerRequest: null, // Required by BullMQ
+  retryStrategy: (times) => Math.min(times * 50, 2000), // Exponential backoff, max 2s
+  enableReadyCheck: false,
+  enableOfflineQueue: false, // Don't queue commands when offline
+  lazyConnect: true, // Don't connect immediately - let workers handle it
 });
 
-redisConnection.on('connect', () => console.log('✅ Redis connected'));
-redisConnection.on('error', (err) =>
-  console.error('❌ Redis connection error:', err.message)
-);
+let isRedisConnected = false;
+
+redisConnection.on('connect', () => {
+  console.log('✅ Redis connected');
+  isRedisConnected = true;
+});
+
+redisConnection.on('error', (err) => {
+  console.error('⚠️  Redis connection error:', err.message);
+  console.warn('⚠️  Queues may not work, but API will continue');
+  isRedisConnected = false;
+});
+
+// Helper to check Redis status
+export function isRedisAvailable(): boolean {
+  return isRedisConnected;
+}
+
+// Try to connect (non-blocking)
+redisConnection.connect().catch(() => {
+  console.warn('⚠️  Could not connect to Redis on startup');
+});
 
 // ─── Default Job Options ─────────────────────────────────────────────────────
 const defaultJobOptions = {
