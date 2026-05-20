@@ -645,34 +645,42 @@ export const addLead = async (req: AuthRequest, res: Response): Promise<void> =>
     console.log('📝 addLead called with:', { driverId, name, phone, address, notes, latitude, longitude });
 
     if (!name) {
+      console.error('❌ Missing customer name');
       res.status(400).json({ success: false, error: 'Customer name is required' });
       return;
     }
 
-    const lead = await prisma.lead.create({
-      data: {
-        driverId,
-        name,
-        phone,
-        address,
-        notes,
-        lat: latitude ?? null,
-        lng: longitude ?? null,
-      },
-    });
+    try {
+      const lead = await prisma.lead.create({
+        data: {
+          driverId,
+          name,
+          phone,
+          address,
+          notes,
+          lat: latitude ?? null,
+          lng: longitude ?? null,
+        },
+      });
 
-    console.log('✅ Lead created:', lead);
+      console.log('✅ Lead created:', lead);
 
-    // ── Push to Odoo CRM (fire-and-forget — DB save must not fail if Odoo is down)
-    pushLeadToOdoo(lead.id, { name, phone, street: address, description: notes }).catch((err) =>
-      console.error('⚠️  Odoo lead push failed (non-blocking):', err?.message)
-    );
+      // ── Push to Odoo CRM (fire-and-forget — DB save must not fail if Odoo is down)
+      pushLeadToOdoo(lead.id, { name, phone, street: address, description: notes }).catch((err) =>
+        console.error('⚠️  Odoo lead push failed (non-blocking):', err?.message)
+      );
 
-    res.status(201).json({ success: true, data: lead });
+      res.status(201).json({ success: true, data: lead });
+    } catch (dbErr: any) {
+      console.error('❌ Prisma error creating lead:', dbErr?.message);
+      console.error('❌ Prisma error code:', dbErr?.code);
+      console.error('❌ Prisma error meta:', JSON.stringify(dbErr?.meta, null, 2));
+      throw dbErr;
+    }
   } catch (err: any) {
-    console.error('❌ addLead error:', err?.message, err?.code, JSON.stringify(err?.meta));
-    console.error('❌ Full error:', err);
-    res.status(500).json({ success: false, error: 'Failed to add lead' });
+    console.error('❌ addLead error:', err?.message, err?.code);
+    console.error('❌ Full error:', JSON.stringify(err, null, 2));
+    res.status(500).json({ success: false, error: 'Failed to add lead', details: err?.message });
   }
 };
 
