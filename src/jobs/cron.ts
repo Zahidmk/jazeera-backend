@@ -165,6 +165,10 @@ export function startOrderCron() {
 
 // ─── Start All Cron Jobs ─────────────────────────────────────────────────────
 export function startAllCronJobs() {
+  if (process.env.DISABLE_REDIS === 'true') {
+    console.log('ℹ️ Cron polling jobs disabled because DISABLE_REDIS=true');
+    return;
+  }
   startProductCron();
   startCustomerCron();
   startOrderCron();

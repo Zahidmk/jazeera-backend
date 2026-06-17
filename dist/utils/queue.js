@@ -27,64 +27,90 @@ const bullmq_1 = require("bullmq");
 const ioredis_1 = __importDefault(require("ioredis"));
 // ─── Redis Connection ────────────────────────────────────────────────────────
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-exports.redisConnection = new ioredis_1.default(REDIS_URL, {
-    maxRetriesPerRequest: null, // Required by BullMQ
-    retryStrategy: (times) => Math.min(times * 50, 2000), // Exponential backoff, max 2s
-    enableReadyCheck: false,
-    enableOfflineQueue: false, // Don't queue commands when offline
-    lazyConnect: true, // Don't connect immediately - let workers handle it
-});
+const DISABLE_REDIS = process.env.DISABLE_REDIS === 'true';
+exports.redisConnection = null;
 let isRedisConnected = false;
-exports.redisConnection.on('connect', () => {
-    console.log('✅ Redis connected');
-    isRedisConnected = true;
-});
-exports.redisConnection.on('error', (err) => {
-    console.error('⚠️  Redis connection error:', err.message);
-    console.warn('⚠️  Queues may not work, but API will continue');
-    isRedisConnected = false;
-});
+if (!DISABLE_REDIS) {
+    exports.redisConnection = new ioredis_1.default(REDIS_URL, {
+        maxRetriesPerRequest: null, // Required by BullMQ
+        retryStrategy: (times) => Math.min(times * 50, 2000), // Exponential backoff, max 2s
+        enableReadyCheck: false,
+        enableOfflineQueue: false, // Don't queue commands when offline
+        lazyConnect: true, // Don't connect immediately - let workers handle it
+    });
+    exports.redisConnection.on('connect', () => {
+        console.log('✅ Redis connected');
+        isRedisConnected = true;
+    });
+    exports.redisConnection.on('error', (err) => {
+        console.error('⚠️  Redis connection error:', err.message);
+        console.warn('⚠️  Queues may not work, but API will continue');
+        isRedisConnected = false;
+    });
+    // Try to connect (non-blocking)
+    exports.redisConnection.connect().catch(() => {
+        console.warn('⚠️  Could not connect to Redis on startup');
+    });
+}
+else {
+    console.log('ℹ️ Redis is disabled via DISABLE_REDIS=true. Using mock queues.');
+}
 // Helper to check Redis status
 function isRedisAvailable() {
-    return isRedisConnected;
+    return !DISABLE_REDIS && isRedisConnected;
 }
-// Try to connect (non-blocking)
-exports.redisConnection.connect().catch(() => {
-    console.warn('⚠️  Could not connect to Redis on startup');
-});
-// ─── Default Job Options ─────────────────────────────────────────────────────
+// ─── Default Job Options & Mock Setup ────────────────────────────────────────
 const defaultJobOptions = {
     attempts: 3,
     backoff: {
         type: 'exponential',
-        delay: 5000, // 5s, 10s, 20s
+        delay: 5000,
     },
-    removeOnComplete: { age: 24 * 60 * 60 }, // keep 24h
-    removeOnFail: { age: 7 * 24 * 60 * 60 }, // keep 7 days
+    removeOnComplete: { age: 24 * 60 * 60 },
+    removeOnFail: { age: 7 * 24 * 60 * 60 },
+};
+const dummyQueue = {
+    add: async (name, data, opts) => {
+        console.log(`ℹ️ [Mock Queue] Job added: ${name} (Redis is disabled)`);
+        return { id: `mock_${Date.now()}` };
+    },
+    getWaitingCount: async () => 0,
+    getActiveCount: async () => 0,
+    getCompletedCount: async () => 0,
+    getFailedCount: async () => 0,
 };
 // ─── Queues ──────────────────────────────────────────────────────────────────
-exports.productQueue = new bullmq_1.Queue('sync-products', {
-    connection: exports.redisConnection,
-    defaultJobOptions,
-});
-exports.customerQueue = new bullmq_1.Queue('sync-customers', {
-    connection: exports.redisConnection,
-    defaultJobOptions,
-});
-exports.orderQueue = new bullmq_1.Queue('sync-orders', {
-    connection: exports.redisConnection,
-    defaultJobOptions,
-});
+exports.productQueue = !DISABLE_REDIS
+    ? new bullmq_1.Queue('sync-products', { connection: exports.redisConnection, defaultJobOptions })
+    : dummyQueue;
+exports.customerQueue = !DISABLE_REDIS
+    ? new bullmq_1.Queue('sync-customers', { connection: exports.redisConnection, defaultJobOptions })
+    : dummyQueue;
+exports.orderQueue = !DISABLE_REDIS
+    ? new bullmq_1.Queue('sync-orders', { connection: exports.redisConnection, defaultJobOptions })
+    : dummyQueue;
 // ─── Queue Events (for logging) ──────────────────────────────────────────────
-exports.productQueueEvents = new bullmq_1.QueueEvents('sync-products', { connection: exports.redisConnection });
-exports.customerQueueEvents = new bullmq_1.QueueEvents('sync-customers', { connection: exports.redisConnection });
-exports.orderQueueEvents = new bullmq_1.QueueEvents('sync-orders', { connection: exports.redisConnection });
-exports.productQueueEvents.on('completed', ({ jobId }) => console.log(`✅ [products] Job ${jobId} completed`));
-exports.productQueueEvents.on('failed', ({ jobId, failedReason }) => console.error(`❌ [products] Job ${jobId} failed: ${failedReason}`));
-exports.customerQueueEvents.on('completed', ({ jobId }) => console.log(`✅ [customers] Job ${jobId} completed`));
-exports.customerQueueEvents.on('failed', ({ jobId, failedReason }) => console.error(`❌ [customers] Job ${jobId} failed: ${failedReason}`));
-exports.orderQueueEvents.on('completed', ({ jobId }) => console.log(`✅ [orders] Job ${jobId} completed`));
-exports.orderQueueEvents.on('failed', ({ jobId, failedReason }) => console.error(`❌ [orders] Job ${jobId} failed: ${failedReason}`));
+exports.productQueueEvents = !DISABLE_REDIS
+    ? new bullmq_1.QueueEvents('sync-products', { connection: exports.redisConnection })
+    : null;
+exports.customerQueueEvents = !DISABLE_REDIS
+    ? new bullmq_1.QueueEvents('sync-customers', { connection: exports.redisConnection })
+    : null;
+exports.orderQueueEvents = !DISABLE_REDIS
+    ? new bullmq_1.QueueEvents('sync-orders', { connection: exports.redisConnection })
+    : null;
+if (exports.productQueueEvents) {
+    exports.productQueueEvents.on('completed', ({ jobId }) => console.log(`✅ [products] Job ${jobId} completed`));
+    exports.productQueueEvents.on('failed', ({ jobId, failedReason }) => console.error(`❌ [products] Job ${jobId} failed: ${failedReason}`));
+}
+if (exports.customerQueueEvents) {
+    exports.customerQueueEvents.on('completed', ({ jobId }) => console.log(`✅ [customers] Job ${jobId} completed`));
+    exports.customerQueueEvents.on('failed', ({ jobId, failedReason }) => console.error(`❌ [customers] Job ${jobId} failed: ${failedReason}`));
+}
+if (exports.orderQueueEvents) {
+    exports.orderQueueEvents.on('completed', ({ jobId }) => console.log(`✅ [orders] Job ${jobId} completed`));
+    exports.orderQueueEvents.on('failed', ({ jobId, failedReason }) => console.error(`❌ [orders] Job ${jobId} failed: ${failedReason}`));
+}
 // ─── Helper: Add jobs ────────────────────────────────────────────────────────
 async function enqueueProductSync(data) {
     const jobId = data.type === 'full_sync' ? 'full_sync_products' : `product_${data.odooId}`;

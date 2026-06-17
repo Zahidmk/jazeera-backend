@@ -18,78 +18,106 @@ import IORedis from 'ioredis';
 
 // ─── Redis Connection ────────────────────────────────────────────────────────
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+const DISABLE_REDIS = process.env.DISABLE_REDIS === 'true';
 
-export const redisConnection = new IORedis(REDIS_URL, {
-  maxRetriesPerRequest: null, // Required by BullMQ
-  retryStrategy: (times) => Math.min(times * 50, 2000), // Exponential backoff, max 2s
-  enableReadyCheck: false,
-  enableOfflineQueue: false, // Don't queue commands when offline
-  lazyConnect: true, // Don't connect immediately - let workers handle it
-});
-
+export let redisConnection: any = null;
 let isRedisConnected = false;
 
-redisConnection.on('connect', () => {
-  console.log('✅ Redis connected');
-  isRedisConnected = true;
-});
+if (!DISABLE_REDIS) {
+  redisConnection = new IORedis(REDIS_URL, {
+    maxRetriesPerRequest: null, // Required by BullMQ
+    retryStrategy: (times) => Math.min(times * 50, 2000), // Exponential backoff, max 2s
+    enableReadyCheck: false,
+    enableOfflineQueue: false, // Don't queue commands when offline
+    lazyConnect: true, // Don't connect immediately - let workers handle it
+  });
 
-redisConnection.on('error', (err) => {
-  console.error('⚠️  Redis connection error:', err.message);
-  console.warn('⚠️  Queues may not work, but API will continue');
-  isRedisConnected = false;
-});
+  redisConnection.on('connect', () => {
+    console.log('✅ Redis connected');
+    isRedisConnected = true;
+  });
+
+  redisConnection.on('error', (err: any) => {
+    console.error('⚠️  Redis connection error:', err.message);
+    console.warn('⚠️  Queues may not work, but API will continue');
+    isRedisConnected = false;
+  });
+
+  // Try to connect (non-blocking)
+  redisConnection.connect().catch(() => {
+    console.warn('⚠️  Could not connect to Redis on startup');
+  });
+} else {
+  console.log('ℹ️ Redis is disabled via DISABLE_REDIS=true. Using mock queues.');
+}
 
 // Helper to check Redis status
 export function isRedisAvailable(): boolean {
-  return isRedisConnected;
+  return !DISABLE_REDIS && isRedisConnected;
 }
 
-// Try to connect (non-blocking)
-redisConnection.connect().catch(() => {
-  console.warn('⚠️  Could not connect to Redis on startup');
-});
-
-// ─── Default Job Options ─────────────────────────────────────────────────────
+// ─── Default Job Options & Mock Setup ────────────────────────────────────────
 const defaultJobOptions = {
   attempts: 3,
   backoff: {
     type: 'exponential' as const,
-    delay: 5000, // 5s, 10s, 20s
+    delay: 5000,
   },
-  removeOnComplete: { age: 24 * 60 * 60 }, // keep 24h
-  removeOnFail: { age: 7 * 24 * 60 * 60 }, // keep 7 days
+  removeOnComplete: { age: 24 * 60 * 60 },
+  removeOnFail: { age: 7 * 24 * 60 * 60 },
+};
+
+const dummyQueue = {
+  add: async (name: string, data: any, opts: any) => {
+    console.log(`ℹ️ [Mock Queue] Job added: ${name} (Redis is disabled)`);
+    return { id: `mock_${Date.now()}` };
+  },
+  getWaitingCount: async () => 0,
+  getActiveCount: async () => 0,
+  getCompletedCount: async () => 0,
+  getFailedCount: async () => 0,
 };
 
 // ─── Queues ──────────────────────────────────────────────────────────────────
-export const productQueue = new Queue('sync-products', {
-  connection: redisConnection,
-  defaultJobOptions,
-});
+export const productQueue = !DISABLE_REDIS
+  ? new Queue('sync-products', { connection: redisConnection, defaultJobOptions })
+  : (dummyQueue as unknown as Queue);
 
-export const customerQueue = new Queue('sync-customers', {
-  connection: redisConnection,
-  defaultJobOptions,
-});
+export const customerQueue = !DISABLE_REDIS
+  ? new Queue('sync-customers', { connection: redisConnection, defaultJobOptions })
+  : (dummyQueue as unknown as Queue);
 
-export const orderQueue = new Queue('sync-orders', {
-  connection: redisConnection,
-  defaultJobOptions,
-});
+export const orderQueue = !DISABLE_REDIS
+  ? new Queue('sync-orders', { connection: redisConnection, defaultJobOptions })
+  : (dummyQueue as unknown as Queue);
 
 // ─── Queue Events (for logging) ──────────────────────────────────────────────
-export const productQueueEvents = new QueueEvents('sync-products', { connection: redisConnection });
-export const customerQueueEvents = new QueueEvents('sync-customers', { connection: redisConnection });
-export const orderQueueEvents = new QueueEvents('sync-orders', { connection: redisConnection });
+export const productQueueEvents = !DISABLE_REDIS
+  ? new QueueEvents('sync-products', { connection: redisConnection })
+  : null;
 
-productQueueEvents.on('completed', ({ jobId }) => console.log(`✅ [products] Job ${jobId} completed`));
-productQueueEvents.on('failed', ({ jobId, failedReason }) => console.error(`❌ [products] Job ${jobId} failed: ${failedReason}`));
+export const customerQueueEvents = !DISABLE_REDIS
+  ? new QueueEvents('sync-customers', { connection: redisConnection })
+  : null;
 
-customerQueueEvents.on('completed', ({ jobId }) => console.log(`✅ [customers] Job ${jobId} completed`));
-customerQueueEvents.on('failed', ({ jobId, failedReason }) => console.error(`❌ [customers] Job ${jobId} failed: ${failedReason}`));
+export const orderQueueEvents = !DISABLE_REDIS
+  ? new QueueEvents('sync-orders', { connection: redisConnection })
+  : null;
 
-orderQueueEvents.on('completed', ({ jobId }) => console.log(`✅ [orders] Job ${jobId} completed`));
-orderQueueEvents.on('failed', ({ jobId, failedReason }) => console.error(`❌ [orders] Job ${jobId} failed: ${failedReason}`));
+if (productQueueEvents) {
+  productQueueEvents.on('completed', ({ jobId }) => console.log(`✅ [products] Job ${jobId} completed`));
+  productQueueEvents.on('failed', ({ jobId, failedReason }) => console.error(`❌ [products] Job ${jobId} failed: ${failedReason}`));
+}
+
+if (customerQueueEvents) {
+  customerQueueEvents.on('completed', ({ jobId }) => console.log(`✅ [customers] Job ${jobId} completed`));
+  customerQueueEvents.on('failed', ({ jobId, failedReason }) => console.error(`❌ [customers] Job ${jobId} failed: ${failedReason}`));
+}
+
+if (orderQueueEvents) {
+  orderQueueEvents.on('completed', ({ jobId }) => console.log(`✅ [orders] Job ${jobId} completed`));
+  orderQueueEvents.on('failed', ({ jobId, failedReason }) => console.error(`❌ [orders] Job ${jobId} failed: ${failedReason}`));
+}
 
 // ─── Job Type Definitions ────────────────────────────────────────────────────
 
