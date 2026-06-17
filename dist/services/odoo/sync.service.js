@@ -76,11 +76,22 @@ async function syncCustomers() {
             lat: oc.partner_latitude || null,
             lng: oc.partner_longitude || null,
         };
-        const existing = await prisma_1.default.customer.findUnique({ where: { odooId: oc.id } });
+        // Deduplicate/merge with local customers that don't have an odooId yet
+        let existing = await prisma_1.default.customer.findUnique({ where: { odooId: oc.id } });
+        if (!existing && phone) {
+            existing = await prisma_1.default.customer.findFirst({
+                where: { phone, odooId: null }
+            });
+        }
+        if (!existing && oc.email) {
+            existing = await prisma_1.default.customer.findFirst({
+                where: { email: oc.email, odooId: null }
+            });
+        }
         if (existing) {
             await prisma_1.default.customer.update({
-                where: { odooId: oc.id },
-                data: { ...data, updatedAt: new Date() },
+                where: { id: existing.id },
+                data: { ...data, odooId: oc.id, updatedAt: new Date() },
             });
             updated++;
         }

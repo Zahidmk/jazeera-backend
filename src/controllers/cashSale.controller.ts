@@ -174,8 +174,29 @@ export const submitSale = async (req: AuthRequest, res: Response): Promise<void>
     let resolvedCustomerId: string | null = null;
 
     if (customerId) {
-      // Verify the customerId actually exists — if not, fall back to walk-in
-      const existingCustomer = await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true } });
+      // Verify the customerId actually exists — if not, check Lead table and convert on the fly
+      let existingCustomer = await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true } });
+      if (!existingCustomer) {
+        const leadExists = await prisma.lead.findUnique({ where: { id: customerId } });
+        if (leadExists) {
+          existingCustomer = await prisma.customer.create({
+            data: {
+              id: leadExists.id,
+              name: leadExists.name,
+              phone: leadExists.phone,
+              address: leadExists.address,
+              lat: leadExists.lat,
+              lng: leadExists.lng,
+            },
+            select: { id: true },
+          });
+          await prisma.lead.update({
+            where: { id: leadExists.id },
+            data: { customerId: leadExists.id },
+          });
+        }
+      }
+
       if (existingCustomer) {
         resolvedCustomerId = customerId;
       }

@@ -113,27 +113,59 @@ if (!DISABLE_REDIS) {
         const address = [freshCustomer.street, freshCustomer.street2, freshCustomer.city]
           .filter(Boolean).join(', ');
 
-        await prisma.customer.upsert({
-          where: { odooId: freshCustomer.id },
-          update: {
-            name: freshCustomer.name,
-            phone: freshCustomer.mobile || freshCustomer.phone || null,
-            email: freshCustomer.email || null,
-            address: address || null,
-            lat: freshCustomer.partner_latitude || null,
-            lng: freshCustomer.partner_longitude || null,
-            updatedAt: new Date(),
-          },
-          create: {
-            odooId: freshCustomer.id,
-            name: freshCustomer.name || `Customer #${freshCustomer.id}`,
-            phone: freshCustomer.mobile || freshCustomer.phone || null,
-            email: freshCustomer.email || null,
-            address: address || null,
-            lat: freshCustomer.partner_latitude || null,
-            lng: freshCustomer.partner_longitude || null,
-          },
-        });
+        const phone = freshCustomer.mobile || freshCustomer.phone || null;
+
+        // Try to find if we already have this customer locally (with odooId: null) by phone or email
+        let existingCustomer = await prisma.customer.findUnique({ where: { odooId: freshCustomer.id } });
+        if (!existingCustomer && phone) {
+          existingCustomer = await prisma.customer.findFirst({
+            where: { phone, odooId: null }
+          });
+        }
+        if (!existingCustomer && freshCustomer.email) {
+          existingCustomer = await prisma.customer.findFirst({
+            where: { email: freshCustomer.email, odooId: null }
+          });
+        }
+
+        if (existingCustomer) {
+          await prisma.customer.update({
+            where: { id: existingCustomer.id },
+            data: {
+              odooId: freshCustomer.id,
+              name: freshCustomer.name,
+              phone: phone || existingCustomer.phone,
+              email: freshCustomer.email || existingCustomer.email,
+              address: address || existingCustomer.address,
+              lat: freshCustomer.partner_latitude || existingCustomer.lat,
+              lng: freshCustomer.partner_longitude || existingCustomer.lng,
+              updatedAt: new Date(),
+            }
+          });
+          job.log(`Merged customer ${freshCustomer.name} with local ID ${existingCustomer.id}`);
+        } else {
+          await prisma.customer.upsert({
+            where: { odooId: freshCustomer.id },
+            update: {
+              name: freshCustomer.name,
+              phone,
+              email: freshCustomer.email || null,
+              address: address || null,
+              lat: freshCustomer.partner_latitude || null,
+              lng: freshCustomer.partner_longitude || null,
+              updatedAt: new Date(),
+            },
+            create: {
+              odooId: freshCustomer.id,
+              name: freshCustomer.name || `Customer #${freshCustomer.id}`,
+              phone,
+              email: freshCustomer.email || null,
+              address: address || null,
+              lat: freshCustomer.partner_latitude || null,
+              lng: freshCustomer.partner_longitude || null,
+            },
+          });
+        }
 
         job.log(`Customer ${freshCustomer.name} upserted`);
         return { odooId: data.odooId, name: freshCustomer.name };

@@ -5,13 +5,45 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getVisits = exports.logVisit = exports.updateQuotationStatus = exports.submitQuotation = exports.updateQuotation = exports.getQuotationById = exports.getQuotations = exports.createQuotation = void 0;
 const prisma_1 = __importDefault(require("../utils/prisma"));
+/**
+ * Ensures that a customer exists in the Customer table.
+ * If the customerId is not found in Customer, but is found in Lead,
+ * it creates a Customer on the fly with the same ID and details,
+ * and links the Lead to this Customer.
+ */
+async function ensureCustomerExists(customerId) {
+    const customerExists = await prisma_1.default.customer.findUnique({ where: { id: customerId } });
+    if (!customerExists) {
+        const leadExists = await prisma_1.default.lead.findUnique({ where: { id: customerId } });
+        if (leadExists) {
+            await prisma_1.default.customer.create({
+                data: {
+                    id: leadExists.id,
+                    name: leadExists.name,
+                    phone: leadExists.phone,
+                    address: leadExists.address,
+                    lat: leadExists.lat,
+                    lng: leadExists.lng,
+                },
+            });
+            // Link the lead to the newly created customer
+            await prisma_1.default.lead.update({
+                where: { id: leadExists.id },
+                data: { customerId: leadExists.id },
+            });
+            return true;
+        }
+        return false;
+    }
+    return true;
+}
 // ─── POST /api/v1/salesman/quotations ────────────────────────────────────────
 const createQuotation = async (req, res) => {
     try {
         const salesmanId = req.user.userId;
         const { customerId, remarks, items, status = 'DRAFT' } = req.body;
         if (customerId) {
-            const customerExists = await prisma_1.default.customer.findUnique({ where: { id: customerId } });
+            const customerExists = await ensureCustomerExists(customerId);
             if (!customerExists) {
                 res.status(404).json({ success: false, error: 'Customer not found' });
                 return;
@@ -170,7 +202,7 @@ const updateQuotation = async (req, res) => {
         }
         let updateData = { remarks };
         if (customerId) {
-            const customerExists = await prisma_1.default.customer.findUnique({ where: { id: customerId } });
+            const customerExists = await ensureCustomerExists(customerId);
             if (!customerExists) {
                 res.status(404).json({ success: false, error: 'Customer not found' });
                 return;
@@ -326,7 +358,7 @@ const logVisit = async (req, res) => {
             res.status(400).json({ success: false, error: 'customerId is required' });
             return;
         }
-        const customerExists = await prisma_1.default.customer.findUnique({ where: { id: customerId } });
+        const customerExists = await ensureCustomerExists(customerId);
         if (!customerExists) {
             res.status(404).json({ success: false, error: 'Customer not found' });
             return;

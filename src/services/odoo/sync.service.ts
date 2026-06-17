@@ -76,12 +76,23 @@ export async function syncCustomers(): Promise<{ created: number; updated: numbe
       lng: oc.partner_longitude || null,
     };
 
-    const existing = await prisma.customer.findUnique({ where: { odooId: oc.id } });
+    // Deduplicate/merge with local customers that don't have an odooId yet
+    let existing = await prisma.customer.findUnique({ where: { odooId: oc.id } });
+    if (!existing && phone) {
+      existing = await prisma.customer.findFirst({
+        where: { phone, odooId: null }
+      });
+    }
+    if (!existing && oc.email) {
+      existing = await prisma.customer.findFirst({
+        where: { email: oc.email, odooId: null }
+      });
+    }
 
     if (existing) {
       await prisma.customer.update({
-        where: { odooId: oc.id },
-        data: { ...data, updatedAt: new Date() },
+        where: { id: existing.id },
+        data: { ...data, odooId: oc.id, updatedAt: new Date() },
       });
       updated++;
     } else {

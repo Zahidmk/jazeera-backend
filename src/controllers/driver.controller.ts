@@ -603,19 +603,36 @@ export const addLead = async (req: AuthRequest, res: Response): Promise<void> =>
     }
 
     try {
-      const lead = await prisma.lead.create({
-        data: {
-          driverId,
-          name,
-          phone,
-          address,
-          notes,
-          lat: latitude ?? null,
-          lng: longitude ?? null,
-        },
+      const latVal = latitude != null ? parseFloat(String(latitude)) : null;
+      const lngVal = longitude != null ? parseFloat(String(longitude)) : null;
+
+      const lead = await prisma.$transaction(async (tx) => {
+        const customer = await tx.customer.create({
+          data: {
+            name,
+            phone: phone || null,
+            address: address || null,
+            lat: latVal,
+            lng: lngVal,
+          },
+        });
+
+        return tx.lead.create({
+          data: {
+            id: customer.id,
+            driverId,
+            customerId: customer.id,
+            name,
+            phone: phone || null,
+            address: address || null,
+            notes: notes || null,
+            lat: latVal,
+            lng: lngVal,
+          },
+        });
       });
 
-      console.log('✅ Lead created:', lead);
+      console.log('✅ Lead and Customer created:', lead);
 
       // ── Push to Odoo CRM (fire-and-forget — DB save must not fail if Odoo is down)
       pushLeadToOdoo(lead.id, { name, phone, street: address, description: notes }).catch((err) =>
