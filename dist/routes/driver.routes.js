@@ -16,11 +16,9 @@ router.get('/deliveries/:id', driver_controller_1.getDeliveryById);
 router.get('/deliveries/:id/navigate', driver_controller_1.getDeliveryNavigation);
 router.patch('/deliveries/:id/status', validators_1.updateDeliveryStatusRules, validators_1.validate, driver_controller_1.updateDeliveryStatus);
 // Stock
-router.post('/stock/scan', driver_controller_1.scanStock);
 router.get('/stock/queue', driver_controller_1.getStockQueue);
-router.patch('/stock/queue/:id', driver_controller_1.updateStockQueueItem);
-router.delete('/stock/queue/:id', driver_controller_1.deleteStockQueueItem);
 router.post('/stock/confirm', driver_controller_1.confirmStockLoad);
+router.post('/stock/reject', driver_controller_1.rejectStockLoad);
 router.post('/stock/adjust', validators_1.stockAdjustRules, validators_1.validate, driver_controller_1.adjustStock);
 // Van Inventory
 router.get('/van/inventory', driver_controller_1.getVanInventory);

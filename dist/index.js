@@ -19,6 +19,8 @@ const cashSale_routes_1 = __importDefault(require("./routes/cashSale.routes"));
 const sync_routes_1 = __importDefault(require("./routes/sync.routes"));
 const admin_routes_1 = __importDefault(require("./routes/admin.routes"));
 const odoo_routes_1 = __importDefault(require("./routes/odoo.routes"));
+const salesman_routes_1 = __importDefault(require("./routes/salesman.routes"));
+const storekeeper_routes_1 = __importDefault(require("./routes/storekeeper.routes"));
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3000;
 // ─── Middleware ──────────────────────────────────────────────────────────────
@@ -65,6 +67,8 @@ app.use('/api/v1/driver/sales', cashSale_routes_1.default);
 app.use('/api/v1/sync', sync_routes_1.default);
 app.use('/api/v1/admin', admin_routes_1.default);
 app.use('/api/v1/odoo', odoo_routes_1.default);
+app.use('/api/v1/salesman', salesman_routes_1.default);
+app.use('/api/v1/storekeeper', storekeeper_routes_1.default);
 // ─── 404 ─────────────────────────────────────────────────────────────────────
 app.use((_req, res) => {
     res.status(404).json({ success: false, error: 'Route not found' });

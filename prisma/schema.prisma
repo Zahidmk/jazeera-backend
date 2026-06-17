@@ -49,6 +49,12 @@ enum LeadStatus {
   CONVERTED
 }
 
+enum LoadStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
 // ─── Models ──────────────────────────────────────────────
 
 model User {
@@ -172,12 +178,14 @@ model Shift {
 }
 
 model StockLoadQueue {
-  id        String   @id @default(uuid())
+  id        String     @id @default(uuid())
   shiftId   String
   productId String
   quantity  Int
-  confirmed Boolean  @default(false)
-  scannedAt DateTime @default(now())
+  confirmed Boolean    @default(false)
+  status    LoadStatus @default(PENDING)
+  notes     String?
+  scannedAt DateTime   @default(now())
 
   shift   Shift   @relation(fields: [shiftId], references: [id])
   product Product @relation(fields: [productId], references: [id])

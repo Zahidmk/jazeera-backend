@@ -106,3 +106,12 @@ export const updateQuotationStatusRules = [
   body('rejectionReason').optional().isLength({ max: 500 }).trim().escape(),
 ];
 
+// ─── Storekeeper Stock Load ──────────────────────────────────────────────────
+export const assignVanLoadRules = [
+  param('vanId').isUUID().withMessage('Van ID must be a UUID'),
+  body('products').isArray({ min: 1 }).withMessage('products must be a non-empty array'),
+  body('products.*.productId').isUUID().withMessage('Each product must have a valid productId UUID'),
+  body('products.*.quantity').isInt({ min: 1 }).withMessage('Each product quantity must be at least 1'),
+];
+
+

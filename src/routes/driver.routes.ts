@@ -7,11 +7,9 @@ import {
   getDeliveryById,
   getDeliveryNavigation,
   updateDeliveryStatus,
-  scanStock,
   getStockQueue,
-  updateStockQueueItem,
-  deleteStockQueueItem,
   confirmStockLoad,
+  rejectStockLoad,
   getVanInventory,
   adjustStock,
   addLead,
@@ -43,11 +41,9 @@ router.get('/deliveries/:id/navigate', getDeliveryNavigation);
 router.patch('/deliveries/:id/status', updateDeliveryStatusRules, validate, updateDeliveryStatus);
 
 // Stock
-router.post('/stock/scan', scanStock);
 router.get('/stock/queue', getStockQueue);
-router.patch('/stock/queue/:id', updateStockQueueItem);
-router.delete('/stock/queue/:id', deleteStockQueueItem);
 router.post('/stock/confirm', confirmStockLoad);
+router.post('/stock/reject', rejectStockLoad);
 router.post('/stock/adjust', stockAdjustRules, validate, adjustStock);
 
 // Van Inventory

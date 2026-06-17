@@ -302,58 +302,6 @@ async function pushDeliveryStatusToOdoo(
   }
 }
 
-// ─── POST /api/v1/driver/stock/scan ──────────────────────────────────────────
-export const scanStock = async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const driverId = req.user!.userId;
-    const { barcode, sku, quantity } = req.body;
-
-    if (!quantity || quantity < 1) {
-      res.status(400).json({ success: false, error: 'Quantity must be at least 1' });
-      return;
-    }
-
-    const product = await prisma.product.findFirst({
-      where: {
-        OR: [
-          { barcode: barcode ?? undefined },
-          { sku: sku ?? undefined },
-        ],
-        isActive: true,
-      },
-    });
-
-    if (!product) {
-      res.status(404).json({ success: false, error: 'Product not found for this barcode/SKU' });
-      return;
-    }
-
-    // Get active shift
-    const shift = await prisma.shift.findFirst({
-      where: { driverId, status: 'ACTIVE' },
-      orderBy: { startedAt: 'desc' },
-    });
-
-    if (!shift) {
-      res.status(400).json({ success: false, error: 'No active shift found. Please start a shift first.' });
-      return;
-    }
-
-    // Upsert into stock load queue
-    const queueItem = await prisma.stockLoadQueue.upsert({
-      where: { shiftId_productId: { shiftId: shift.id, productId: product.id } },
-      update: { quantity: { increment: quantity } },
-      create: { shiftId: shift.id, productId: product.id, quantity },
-      include: { product: { select: { id: true, name: true, sku: true, unit: true } } },
-    });
-
-    res.json({ success: true, data: queueItem });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, error: 'Stock scan failed' });
-  }
-};
-
 // ─── GET /api/v1/driver/stock/queue ──────────────────────────────────────────
 export const getStockQueue = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -378,42 +326,6 @@ export const getStockQueue = async (req: AuthRequest, res: Response): Promise<vo
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: 'Failed to get stock queue' });
-  }
-};
-
-// ─── PATCH /api/v1/driver/stock/queue/:id ────────────────────────────────────
-export const updateStockQueueItem = async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    const { quantity } = req.body;
-
-    if (!quantity || quantity < 1) {
-      res.status(400).json({ success: false, error: 'Quantity must be at least 1' });
-      return;
-    }
-
-    const updated = await prisma.stockLoadQueue.update({
-      where: { id },
-      data: { quantity },
-      include: { product: { select: { id: true, name: true, sku: true } } },
-    });
-
-    res.json({ success: true, data: updated });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, error: 'Failed to update queue item' });
-  }
-};
-
-// ─── DELETE /api/v1/driver/stock/queue/:id ───────────────────────────────────
-export const deleteStockQueueItem = async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    await prisma.stockLoadQueue.delete({ where: { id } });
-    res.json({ success: true, message: 'Item removed from queue' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, error: 'Failed to remove queue item' });
   }
 };
 
@@ -454,7 +366,7 @@ export const confirmStockLoad = async (req: AuthRequest, res: Response): Promise
       }
       await tx.stockLoadQueue.updateMany({
         where: { shiftId: shift.id, confirmed: false },
-        data: { confirmed: true },
+        data: { confirmed: true, status: 'ACCEPTED' },
       });
     });
 
@@ -467,6 +379,46 @@ export const confirmStockLoad = async (req: AuthRequest, res: Response): Promise
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: 'Failed to confirm stock load' });
+  }
+};
+
+// ─── POST /api/v1/driver/stock/reject ────────────────────────────────────────
+export const rejectStockLoad = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const driverId = req.user!.userId;
+    const { notes } = req.body;
+
+    const shift = await prisma.shift.findFirst({
+      where: { driverId, status: 'ACTIVE' },
+      orderBy: { startedAt: 'desc' },
+    });
+
+    if (!shift) {
+      res.status(400).json({ success: false, error: 'No active shift found' });
+      return;
+    }
+
+    const queueItems = await prisma.stockLoadQueue.findMany({
+      where: { shiftId: shift.id, confirmed: false },
+    });
+
+    if (queueItems.length === 0) {
+      res.status(400).json({ success: false, error: 'No pending items in queue to reject' });
+      return;
+    }
+
+    await prisma.stockLoadQueue.updateMany({
+      where: { shiftId: shift.id, confirmed: false },
+      data: {
+        status: 'REJECTED',
+        notes: notes || null,
+      },
+    });
+
+    res.json({ success: true, message: 'Stock load rejected successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Failed to reject stock load' });
   }
 };
 

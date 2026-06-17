@@ -39,7 +39,7 @@ const login = async (req, res) => {
             success: true,
             data: {
                 token,
-                driver: {
+                user: {
                     id: user.id,
                     name: user.name,
                     email: user.email,

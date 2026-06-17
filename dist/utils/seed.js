@@ -45,6 +45,30 @@ async function main() {
         },
     });
     console.log(`✅ Admin created: ${admin.email}`);
+    const storekeeper = await prisma_1.default.user.upsert({
+        where: { email: 'storekeeper@jazeera.com' },
+        update: {},
+        create: {
+            name: 'Youssef Haddad',
+            email: 'storekeeper@jazeera.com',
+            phone: '+971501112222',
+            passwordHash,
+            role: 'STORE_KEEPER',
+        },
+    });
+    console.log(`✅ Store Keeper created: ${storekeeper.email}`);
+    const salesman = await prisma_1.default.user.upsert({
+        where: { email: 'salesman@jazeera.com' },
+        update: {},
+        create: {
+            name: 'Tarek Mansoor',
+            email: 'salesman@jazeera.com',
+            phone: '+971503334444',
+            passwordHash,
+            role: 'SALESMAN',
+        },
+    });
+    console.log(`✅ Salesman created: ${salesman.email}`);
     // ─── Create van and assign to driver ─────────────────────────────────────
     const van = await prisma_1.default.van.upsert({
         where: { plateNumber: 'DXB-A-12345' },
@@ -135,12 +159,52 @@ async function main() {
         },
     });
     console.log('✅ 2 sample deliveries created');
+    // ─── Create sample quotations ─────────────────────────────────────────────
+    const quotation1 = await prisma_1.default.quotation.create({
+        data: {
+            salesmanId: salesman.id,
+            customerId: customer1.id,
+            status: 'DRAFT',
+            totalAmount: 36.0,
+            remarks: 'First draft quotation for Al Madina',
+            items: {
+                create: [
+                    { productId: productList[0].id, quantity: 12, unitPrice: productList[0].priceRetail },
+                    { productId: productList[1].id, quantity: 6, unitPrice: productList[1].priceRetail },
+                ],
+            },
+        },
+    });
+    console.log(`✅ Sample Quotation 1 created: ${quotation1.id}`);
+    const quotation2 = await prisma_1.default.quotation.create({
+        data: {
+            salesmanId: salesman.id,
+            customerId: customer2.id,
+            status: 'SUBMITTED',
+            totalAmount: 12.0,
+            remarks: 'Special requested price on orange juice',
+            items: {
+                create: [
+                    {
+                        productId: productList[2].id,
+                        quantity: 2,
+                        unitPrice: productList[2].priceRetail,
+                        requestedPrice: 4.0, // base price is 5.0
+                        suggestedMode: true,
+                    },
+                ],
+            },
+        },
+    });
+    console.log(`✅ Sample Quotation 2 created: ${quotation2.id}`);
     console.log('\n🎉 Seed complete!');
     console.log('─────────────────────────────────────────');
     console.log('🔑 Test login credentials:');
-    console.log('   Driver  → email: driver@jazeera.com  | password: password123');
-    console.log('   Manager → email: manager@jazeera.com | password: password123');
-    console.log('   Admin   → email: admin@jazeera.com   | password: password123');
+    console.log('   Driver      → email: driver@jazeera.com      | password: password123');
+    console.log('   StoreKeeper → email: storekeeper@jazeera.com | password: password123');
+    console.log('   Salesman    → email: salesman@jazeera.com    | password: password123');
+    console.log('   Manager     → email: manager@jazeera.com     | password: password123');
+    console.log('   Admin       → email: admin@jazeera.com       | password: password123');
     console.log('─────────────────────────────────────────');
 }
 main()

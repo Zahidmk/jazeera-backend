@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.endShift = exports.startShift = exports.getShiftSummary = exports.addLead = exports.searchCustomers = exports.adjustStock = exports.getVanInventory = exports.confirmStockLoad = exports.deleteStockQueueItem = exports.updateStockQueueItem = exports.getStockQueue = exports.scanStock = exports.updateDeliveryStatus = exports.getDeliveryNavigation = exports.getDeliveryById = exports.getDeliveries = exports.getRoute = exports.getHome = void 0;
+exports.endShift = exports.startShift = exports.getShiftSummary = exports.addLead = exports.searchCustomers = exports.adjustStock = exports.getVanInventory = exports.rejectStockLoad = exports.confirmStockLoad = exports.getStockQueue = exports.updateDeliveryStatus = exports.getDeliveryNavigation = exports.getDeliveryById = exports.getDeliveries = exports.getRoute = exports.getHome = void 0;
 const prisma_1 = __importDefault(require("../utils/prisma"));
 const odoo_service_1 = __importDefault(require("../services/odoo/odoo.service"));
 // ─── GET /api/v1/driver/home ─────────────────────────────────────────────────
@@ -281,52 +281,6 @@ async function pushDeliveryStatusToOdoo(odooOrderId, status, notes) {
         console.log(`✅ Odoo: SO ${odooOrderId} cancelled (delivery failed)`);
     }
 }
-// ─── POST /api/v1/driver/stock/scan ──────────────────────────────────────────
-const scanStock = async (req, res) => {
-    try {
-        const driverId = req.user.userId;
-        const { barcode, sku, quantity } = req.body;
-        if (!quantity || quantity < 1) {
-            res.status(400).json({ success: false, error: 'Quantity must be at least 1' });
-            return;
-        }
-        const product = await prisma_1.default.product.findFirst({
-            where: {
-                OR: [
-                    { barcode: barcode ?? undefined },
-                    { sku: sku ?? undefined },
-                ],
-                isActive: true,
-            },
-        });
-        if (!product) {
-            res.status(404).json({ success: false, error: 'Product not found for this barcode/SKU' });
-            return;
-        }
-        // Get active shift
-        const shift = await prisma_1.default.shift.findFirst({
-            where: { driverId, status: 'ACTIVE' },
-            orderBy: { startedAt: 'desc' },
-        });
-        if (!shift) {
-            res.status(400).json({ success: false, error: 'No active shift found. Please start a shift first.' });
-            return;
-        }
-        // Upsert into stock load queue
-        const queueItem = await prisma_1.default.stockLoadQueue.upsert({
-            where: { shiftId_productId: { shiftId: shift.id, productId: product.id } },
-            update: { quantity: { increment: quantity } },
-            create: { shiftId: shift.id, productId: product.id, quantity },
-            include: { product: { select: { id: true, name: true, sku: true, unit: true } } },
-        });
-        res.json({ success: true, data: queueItem });
-    }
-    catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, error: 'Stock scan failed' });
-    }
-};
-exports.scanStock = scanStock;
 // ─── GET /api/v1/driver/stock/queue ──────────────────────────────────────────
 const getStockQueue = async (req, res) => {
     try {
@@ -351,41 +305,6 @@ const getStockQueue = async (req, res) => {
     }
 };
 exports.getStockQueue = getStockQueue;
-// ─── PATCH /api/v1/driver/stock/queue/:id ────────────────────────────────────
-const updateStockQueueItem = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { quantity } = req.body;
-        if (!quantity || quantity < 1) {
-            res.status(400).json({ success: false, error: 'Quantity must be at least 1' });
-            return;
-        }
-        const updated = await prisma_1.default.stockLoadQueue.update({
-            where: { id },
-            data: { quantity },
-            include: { product: { select: { id: true, name: true, sku: true } } },
-        });
-        res.json({ success: true, data: updated });
-    }
-    catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, error: 'Failed to update queue item' });
-    }
-};
-exports.updateStockQueueItem = updateStockQueueItem;
-// ─── DELETE /api/v1/driver/stock/queue/:id ───────────────────────────────────
-const deleteStockQueueItem = async (req, res) => {
-    try {
-        const { id } = req.params;
-        await prisma_1.default.stockLoadQueue.delete({ where: { id } });
-        res.json({ success: true, message: 'Item removed from queue' });
-    }
-    catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, error: 'Failed to remove queue item' });
-    }
-};
-exports.deleteStockQueueItem = deleteStockQueueItem;
 // ─── POST /api/v1/driver/stock/confirm ───────────────────────────────────────
 const confirmStockLoad = async (req, res) => {
     try {
@@ -418,7 +337,7 @@ const confirmStockLoad = async (req, res) => {
             }
             await tx.stockLoadQueue.updateMany({
                 where: { shiftId: shift.id, confirmed: false },
-                data: { confirmed: true },
+                data: { confirmed: true, status: 'ACCEPTED' },
             });
         });
         res.json({ success: true, message: `${queueItems.length} items loaded into van successfully` });
@@ -431,6 +350,41 @@ const confirmStockLoad = async (req, res) => {
     }
 };
 exports.confirmStockLoad = confirmStockLoad;
+// ─── POST /api/v1/driver/stock/reject ────────────────────────────────────────
+const rejectStockLoad = async (req, res) => {
+    try {
+        const driverId = req.user.userId;
+        const { notes } = req.body;
+        const shift = await prisma_1.default.shift.findFirst({
+            where: { driverId, status: 'ACTIVE' },
+            orderBy: { startedAt: 'desc' },
+        });
+        if (!shift) {
+            res.status(400).json({ success: false, error: 'No active shift found' });
+            return;
+        }
+        const queueItems = await prisma_1.default.stockLoadQueue.findMany({
+            where: { shiftId: shift.id, confirmed: false },
+        });
+        if (queueItems.length === 0) {
+            res.status(400).json({ success: false, error: 'No pending items in queue to reject' });
+            return;
+        }
+        await prisma_1.default.stockLoadQueue.updateMany({
+            where: { shiftId: shift.id, confirmed: false },
+            data: {
+                status: 'REJECTED',
+                notes: notes || null,
+            },
+        });
+        res.json({ success: true, message: 'Stock load rejected successfully' });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: 'Failed to reject stock load' });
+    }
+};
+exports.rejectStockLoad = rejectStockLoad;
 /**
  * Push van stock load to Odoo as an internal transfer:
  * Main Warehouse/Stock → Van Location
