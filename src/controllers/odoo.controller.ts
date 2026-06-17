@@ -1,25 +1,30 @@
 import { Request, Response } from 'express';
 import odoo from '../services/odoo/odoo.service';
+import prisma from '../utils/prisma';
 
 // ─── GET /api/v1/odoo/products ─────────────────────────────────────────────
-// Fetch all products directly from Odoo (no DB sync needed)
+// Fetch all products from local PostgreSQL database (synced from Odoo)
 export const getOdooProducts = async (req: Request, res: Response): Promise<void> => {
   try {
     const limit = parseInt((req.query.limit as string) || '500');
-    const products = await odoo.fetchProducts(limit);
+    
+    const products = await prisma.product.findMany({
+      take: limit,
+      orderBy: { name: 'asc' },
+    });
 
     const mapped = products.map((p: any) => ({
-      id: p.id,
+      id: p.odooId || 0, // Map to odooId for dashboard compatibility
       name: p.name,
-      sku: p.default_code || `ODOO-${p.id}`,
+      sku: p.sku,
       barcode: p.barcode || null,
-      category: p.categ_id ? p.categ_id[1] : null,
-      unit: p.uom_id ? p.uom_id[1] : 'pcs',
-      priceRetail: p.list_price || 0,
-      priceWhole: p.standard_price || 0,
-      qtyAvailable: p.qty_available || 0,
-      imageUrl: p.image_128 ? `data:image/png;base64,${p.image_128}` : null,
-      isActive: p.active !== false,
+      category: p.category || null,
+      unit: p.unit || 'pcs',
+      priceRetail: p.priceRetail || 0,
+      priceWhole: p.priceWhole || 0,
+      qtyAvailable: 0, 
+      imageUrl: p.imageUrl || null,
+      isActive: p.isActive !== false,
     }));
 
     res.json({
@@ -28,8 +33,8 @@ export const getOdooProducts = async (req: Request, res: Response): Promise<void
       meta: { total: mapped.length },
     });
   } catch (err: any) {
-    console.error('Odoo products fetch error:', err);
-    res.status(500).json({ success: false, error: `Failed to fetch products from Odoo: ${err.message}` });
+    console.error('Local products fetch error:', err);
+    res.status(500).json({ success: false, error: `Failed to fetch products: ${err.message}` });
   }
 };
 

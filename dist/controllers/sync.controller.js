@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.queueStatus = exports.syncAll = exports.syncOrders = exports.syncCustomers = exports.syncProducts = exports.testConnection = void 0;
+const prisma_1 = __importDefault(require("../utils/prisma"));
 const odoo_service_1 = __importDefault(require("../services/odoo/odoo.service"));
 const queue_1 = require("../utils/queue");
 // ─── Test Odoo Connection ───────────────────────────────
@@ -32,9 +33,19 @@ const testConnection = async (_req, res) => {
 exports.testConnection = testConnection;
 // ─── Sync Products ──────────────────────────────────────
 // Enqueues a full product sync job and returns immediately.
-// The worker processes it in the background with retry logic.
+// If Redis is disabled, it runs synchronously.
 const syncProducts = async (_req, res) => {
     try {
+        if (process.env.DISABLE_REDIS === 'true') {
+            const syncService = require('../services/odoo/sync.service');
+            const result = await syncService.syncProducts();
+            res.json({
+                success: true,
+                message: 'Products synced synchronously (Redis is disabled)',
+                data: result,
+            });
+            return;
+        }
         const job = await (0, queue_1.enqueueProductSync)({ type: 'full_sync' });
         res.json({
             success: true,
@@ -44,13 +55,23 @@ const syncProducts = async (_req, res) => {
         });
     }
     catch (error) {
-        res.status(500).json({ success: false, error: `Failed to queue product sync: ${error.message}` });
+        res.status(500).json({ success: false, error: `Failed to sync products: ${error.message}` });
     }
 };
 exports.syncProducts = syncProducts;
 // ─── Sync Customers ─────────────────────────────────────
 const syncCustomers = async (_req, res) => {
     try {
+        if (process.env.DISABLE_REDIS === 'true') {
+            const syncService = require('../services/odoo/sync.service');
+            const result = await syncService.syncCustomers();
+            res.json({
+                success: true,
+                message: 'Customers synced synchronously (Redis is disabled)',
+                data: result,
+            });
+            return;
+        }
         const job = await (0, queue_1.enqueueCustomerSync)({ type: 'full_sync' });
         res.json({
             success: true,
@@ -60,16 +81,33 @@ const syncCustomers = async (_req, res) => {
         });
     }
     catch (error) {
-        res.status(500).json({ success: false, error: `Failed to queue customer sync: ${error.message}` });
+        res.status(500).json({ success: false, error: `Failed to sync customers: ${error.message}` });
     }
 };
 exports.syncCustomers = syncCustomers;
 // ─── Sync Orders → Deliveries ───────────────────────────
 const syncOrders = async (req, res) => {
     try {
-        const driverId = req.user?.userId;
+        let driverId = req.user?.userId;
         if (!driverId) {
-            return res.status(400).json({ success: false, error: 'Driver ID required. Use auth token.' });
+            const driver = await prisma_1.default.user.findFirst({
+                where: { role: 'DRIVER', isActive: true },
+                select: { id: true },
+            });
+            driverId = driver?.id;
+        }
+        if (!driverId) {
+            return res.status(400).json({ success: false, error: 'No active driver found for order sync assignment.' });
+        }
+        if (process.env.DISABLE_REDIS === 'true') {
+            const syncService = require('../services/odoo/sync.service');
+            const result = await syncService.syncOrders(driverId);
+            res.json({
+                success: true,
+                message: 'Orders synced synchronously (Redis is disabled)',
+                data: result,
+            });
+            return;
         }
         const job = await (0, queue_1.enqueueOrderSync)({ type: 'full_sync', driverId });
         res.json({
@@ -80,14 +118,34 @@ const syncOrders = async (req, res) => {
         });
     }
     catch (error) {
-        res.status(500).json({ success: false, error: `Failed to queue order sync: ${error.message}` });
+        res.status(500).json({ success: false, error: `Failed to sync orders: ${error.message}` });
     }
 };
 exports.syncOrders = syncOrders;
 // ─── Full Sync (all at once) ────────────────────────────
 const syncAll = async (req, res) => {
     try {
-        const driverId = req.user?.userId;
+        let driverId = req.user?.userId;
+        if (!driverId) {
+            const driver = await prisma_1.default.user.findFirst({
+                where: { role: 'DRIVER', isActive: true },
+                select: { id: true },
+            });
+            driverId = driver?.id;
+        }
+        if (!driverId) {
+            return res.status(400).json({ success: false, error: 'No active driver found for order sync assignment.' });
+        }
+        if (process.env.DISABLE_REDIS === 'true') {
+            const syncService = require('../services/odoo/sync.service');
+            const result = await syncService.syncAll(driverId);
+            res.json({
+                success: true,
+                message: 'Full sync executed synchronously (Redis is disabled)',
+                data: result,
+            });
+            return;
+        }
         const [pJob, cJob, oJob] = await Promise.all([
             (0, queue_1.enqueueProductSync)({ type: 'full_sync' }),
             (0, queue_1.enqueueCustomerSync)({ type: 'full_sync' }),
@@ -101,7 +159,7 @@ const syncAll = async (req, res) => {
         });
     }
     catch (error) {
-        res.status(500).json({ success: false, error: `Failed to queue full sync: ${error.message}` });
+        res.status(500).json({ success: false, error: `Failed to sync all: ${error.message}` });
     }
 };
 exports.syncAll = syncAll;

@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import prisma from '../utils/prisma';
 import odoo from '../services/odoo/odoo.service';
 import {
   enqueueProductSync,
@@ -32,9 +33,20 @@ export const testConnection = async (_req: Request, res: Response) => {
 
 // ─── Sync Products ──────────────────────────────────────
 // Enqueues a full product sync job and returns immediately.
-// The worker processes it in the background with retry logic.
+// If Redis is disabled, it runs synchronously.
 export const syncProducts = async (_req: Request, res: Response) => {
   try {
+    if (process.env.DISABLE_REDIS === 'true') {
+      const syncService = require('../services/odoo/sync.service');
+      const result = await syncService.syncProducts();
+      res.json({
+        success: true,
+        message: 'Products synced synchronously (Redis is disabled)',
+        data: result,
+      });
+      return;
+    }
+
     const job = await enqueueProductSync({ type: 'full_sync' });
     res.json({
       success: true,
@@ -43,13 +55,24 @@ export const syncProducts = async (_req: Request, res: Response) => {
       note: 'Check /api/v1/sync/queue-status for progress',
     });
   } catch (error: any) {
-    res.status(500).json({ success: false, error: `Failed to queue product sync: ${error.message}` });
+    res.status(500).json({ success: false, error: `Failed to sync products: ${error.message}` });
   }
 };
 
 // ─── Sync Customers ─────────────────────────────────────
 export const syncCustomers = async (_req: Request, res: Response) => {
   try {
+    if (process.env.DISABLE_REDIS === 'true') {
+      const syncService = require('../services/odoo/sync.service');
+      const result = await syncService.syncCustomers();
+      res.json({
+        success: true,
+        message: 'Customers synced synchronously (Redis is disabled)',
+        data: result,
+      });
+      return;
+    }
+
     const job = await enqueueCustomerSync({ type: 'full_sync' });
     res.json({
       success: true,
@@ -58,17 +81,37 @@ export const syncCustomers = async (_req: Request, res: Response) => {
       note: 'Check /api/v1/sync/queue-status for progress',
     });
   } catch (error: any) {
-    res.status(500).json({ success: false, error: `Failed to queue customer sync: ${error.message}` });
+    res.status(500).json({ success: false, error: `Failed to sync customers: ${error.message}` });
   }
 };
 
 // ─── Sync Orders → Deliveries ───────────────────────────
 export const syncOrders = async (req: Request, res: Response) => {
   try {
-    const driverId = (req as any).user?.userId;
+    let driverId = (req as any).user?.userId;
     if (!driverId) {
-      return res.status(400).json({ success: false, error: 'Driver ID required. Use auth token.' });
+      const driver = await prisma.user.findFirst({
+        where: { role: 'DRIVER', isActive: true },
+        select: { id: true },
+      });
+      driverId = driver?.id;
     }
+
+    if (!driverId) {
+      return res.status(400).json({ success: false, error: 'No active driver found for order sync assignment.' });
+    }
+
+    if (process.env.DISABLE_REDIS === 'true') {
+      const syncService = require('../services/odoo/sync.service');
+      const result = await syncService.syncOrders(driverId);
+      res.json({
+        success: true,
+        message: 'Orders synced synchronously (Redis is disabled)',
+        data: result,
+      });
+      return;
+    }
+
     const job = await enqueueOrderSync({ type: 'full_sync', driverId });
     res.json({
       success: true,
@@ -77,14 +120,37 @@ export const syncOrders = async (req: Request, res: Response) => {
       note: 'Check /api/v1/sync/queue-status for progress',
     });
   } catch (error: any) {
-    res.status(500).json({ success: false, error: `Failed to queue order sync: ${error.message}` });
+    res.status(500).json({ success: false, error: `Failed to sync orders: ${error.message}` });
   }
 };
 
 // ─── Full Sync (all at once) ────────────────────────────
 export const syncAll = async (req: Request, res: Response) => {
   try {
-    const driverId = (req as any).user?.userId;
+    let driverId = (req as any).user?.userId;
+    if (!driverId) {
+      const driver = await prisma.user.findFirst({
+        where: { role: 'DRIVER', isActive: true },
+        select: { id: true },
+      });
+      driverId = driver?.id;
+    }
+
+    if (!driverId) {
+      return res.status(400).json({ success: false, error: 'No active driver found for order sync assignment.' });
+    }
+
+    if (process.env.DISABLE_REDIS === 'true') {
+      const syncService = require('../services/odoo/sync.service');
+      const result = await syncService.syncAll(driverId);
+      res.json({
+        success: true,
+        message: 'Full sync executed synchronously (Redis is disabled)',
+        data: result,
+      });
+      return;
+    }
+
     const [pJob, cJob, oJob] = await Promise.all([
       enqueueProductSync({ type: 'full_sync' }),
       enqueueCustomerSync({ type: 'full_sync' }),
@@ -97,7 +163,7 @@ export const syncAll = async (req: Request, res: Response) => {
       note: 'Check /api/v1/sync/queue-status for progress',
     });
   } catch (error: any) {
-    res.status(500).json({ success: false, error: `Failed to queue full sync: ${error.message}` });
+    res.status(500).json({ success: false, error: `Failed to sync all: ${error.message}` });
   }
 };
 
