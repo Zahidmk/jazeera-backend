@@ -11,6 +11,7 @@ import {
   getVisits,
   getCustomers,
   getProducts,
+  getDashboardStats,
 } from '../controllers/salesman.controller';
 import {
   createQuotationRules,
@@ -23,6 +24,9 @@ const router = Router();
 
 // Require authentication for all salesman routes
 router.use(authenticate);
+
+// Dashboard Stats
+router.get('/dashboard', authorizeRoles('SALESMAN', 'MANAGER', 'ADMIN'), getDashboardStats);
 
 // B2B Quotations Management
 router.post('/quotations', authorizeRoles('SALESMAN', 'MANAGER', 'ADMIN'), createQuotationRules, validate, createQuotation);

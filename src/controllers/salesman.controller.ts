@@ -567,3 +567,48 @@ export const getProducts = async (req: AuthRequest, res: Response): Promise<void
   }
 };
 
+// ─── GET /api/v1/salesman/dashboard ──────────────────────────────────────────
+export const getDashboardStats = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const userRole = req.user!.role;
+
+    // Filter by the logged-in salesman, or allow admin/manager to filter by a specific salesmanId query param
+    const targetSalesmanId = (userRole === 'ADMIN' || userRole === 'MANAGER') && req.query.salesmanId
+      ? String(req.query.salesmanId)
+      : userId;
+
+    const [
+      totalQuotations,
+      pendingQuotations,
+      draftQuotations,
+      approvedQuotations,
+      rejectedQuotations,
+      customerVisits,
+    ] = await Promise.all([
+      prisma.quotation.count({ where: { salesmanId: targetSalesmanId } }),
+      prisma.quotation.count({ where: { salesmanId: targetSalesmanId, status: 'SUBMITTED' } }),
+      prisma.quotation.count({ where: { salesmanId: targetSalesmanId, status: 'DRAFT' } }),
+      prisma.quotation.count({ where: { salesmanId: targetSalesmanId, status: 'APPROVED' } }),
+      prisma.quotation.count({ where: { salesmanId: targetSalesmanId, status: 'REJECTED' } }),
+      prisma.customerVisit.count({ where: { salesmanId: targetSalesmanId } }),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        totalQuotations,
+        pendingQuotations,
+        draftQuotations,
+        approvedQuotations,
+        rejectedQuotations,
+        customerVisits,
+      },
+    });
+  } catch (err) {
+    console.error('Get Salesman Dashboard Stats Error:', err);
+    res.status(500).json({ success: false, error: 'Failed to retrieve dashboard stats' });
+  }
+};
+
+

@@ -146,6 +146,13 @@ async function runTests() {
   const getVisits = await request('GET', '/api/v1/salesman/visits', null, SALESMAN_TOKEN);
   console.log(`${getVisits.status === 200 ? '✅' : '❌'} List Visits: ${getVisits.status} — Count: ${getVisits.body.data?.length}`);
 
+  // 11. Get Dashboard Stats
+  const getDashboard = await request('GET', '/api/v1/salesman/dashboard', null, SALESMAN_TOKEN);
+  console.log(`${getDashboard.status === 200 ? '✅' : '❌'} Get Dashboard Stats: ${getDashboard.status}`);
+  if (getDashboard.status === 200) {
+    console.log(`   Response Data:`, JSON.stringify(getDashboard.body.data, null, 2));
+  }
+
   console.log('\n=== INTEGRATION TESTS COMPLETED ===');
   prisma.$disconnect();
 }
