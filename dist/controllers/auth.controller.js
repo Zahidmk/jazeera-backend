@@ -11,6 +11,7 @@ const prisma_1 = __importDefault(require("../utils/prisma"));
 const login = async (req, res) => {
     try {
         const { email, phone, password } = req.body;
+        console.log("LOGIN BODY:", req.body);
         if (!password || (!email && !phone)) {
             res.status(400).json({ success: false, error: 'Email or phone and password are required' });
             return;
@@ -25,11 +26,13 @@ const login = async (req, res) => {
             },
             include: { van: { select: { id: true, plateNumber: true } } },
         });
+        console.log("USER FOUND:", !!user);
         if (!user) {
             res.status(401).json({ success: false, error: 'Invalid credentials' });
             return;
         }
         const passwordMatch = await bcryptjs_1.default.compare(password, user.passwordHash);
+        console.log("PASSWORD MATCH:", passwordMatch);
         if (!passwordMatch) {
             res.status(401).json({ success: false, error: 'Invalid credentials' });
             return;

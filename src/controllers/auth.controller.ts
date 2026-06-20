@@ -8,6 +8,7 @@ import { AuthRequest } from '../types';
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, phone, password } = req.body;
+    console.log("LOGIN BODY:", req.body);
 
     if (!password || (!email && !phone)) {
       res.status(400).json({ success: false, error: 'Email or phone and password are required' });
@@ -24,6 +25,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       },
       include: { van: { select: { id: true, plateNumber: true } } },
     });
+    console.log("USER FOUND:", !!user);
 
     if (!user) {
       res.status(401).json({ success: false, error: 'Invalid credentials' });
@@ -31,6 +33,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     const passwordMatch = await bcrypt.compare(password, user.passwordHash);
+    console.log("PASSWORD MATCH:", passwordMatch);
     if (!passwordMatch) {
       res.status(401).json({ success: false, error: 'Invalid credentials' });
       return;
