@@ -134,15 +134,15 @@ async function pushQuotationToOdoo(quotationId: string): Promise<void> {
     }
 
     // Pushing to Odoo as a draft Sale Order (represents a Quotation in Odoo)
-    const odooSaleId = await odoo.createSaleOrder(partnerOdooId, lines);
+    const odooQuotationId = await odoo.createSaleOrder(partnerOdooId, lines);
 
     // Update local quotation with the Odoo Sale Order ID
     await prisma.quotation.update({
       where: { id: quotationId },
-      data: { odooSaleId },
+      data: { odooQuotationId },
     });
 
-    console.log(`✅ Odoo: Quotation ${quotationId} successfully synced to Odoo as draft SO ${odooSaleId}`);
+    console.log(`✅ Odoo: Quotation ${quotationId} successfully synced to Odoo as draft SO ${odooQuotationId}`);
   } catch (err: any) {
     console.error(`❌ Odoo Quotation Push Error for quotation ${quotationId}:`, err?.message);
   }
