@@ -566,12 +566,12 @@ export const searchCustomers = async (req: AuthRequest, res: Response): Promise<
     const customers = await prisma.customer.findMany({
       where: q
         ? {
-            OR: [
-              { name: { contains: q, mode: 'insensitive' } },
-              { phone: { contains: q, mode: 'insensitive' } },
-              { address: { contains: q, mode: 'insensitive' } },
-            ],
-          }
+          OR: [
+            { name: { contains: q, mode: 'insensitive' } },
+            { phone: { contains: q, mode: 'insensitive' } },
+            { address: { contains: q, mode: 'insensitive' } },
+          ],
+        }
         : undefined,
       select: { id: true, name: true, phone: true, address: true },
       orderBy: { name: 'asc' },

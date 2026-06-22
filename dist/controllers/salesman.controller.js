@@ -3,8 +3,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getProducts = exports.getCustomers = exports.getVisits = exports.logVisit = exports.updateQuotationStatus = exports.submitQuotation = exports.updateQuotation = exports.getQuotationById = exports.getQuotations = exports.createQuotation = void 0;
+exports.getDashboardStats = exports.getProducts = exports.getCustomers = exports.getVisits = exports.logVisit = exports.updateQuotationStatus = exports.submitQuotation = exports.updateQuotation = exports.getQuotationById = exports.getQuotations = exports.createQuotation = void 0;
 const prisma_1 = __importDefault(require("../utils/prisma"));
+const odoo_service_1 = __importDefault(require("../services/odoo/odoo.service"));
 /**
  * Ensures that a customer exists in the Customer table.
  * If the customerId is not found in Customer, but is found in Lead,
@@ -36,6 +37,105 @@ async function ensureCustomerExists(customerId) {
         return false;
     }
     return true;
+}
+/**
+ * Pushes an approved quotation to Odoo as a draft Sale Order.
+ * Resolves or registers the customer in Odoo if needed.
+ */
+async function pushQuotationToOdoo(quotationId) {
+    try {
+        const quotation = await prisma_1.default.quotation.findUnique({
+            where: { id: quotationId },
+            include: {
+                customer: true,
+                items: {
+                    include: {
+                        product: { select: { odooId: true } },
+                    },
+                },
+            },
+        });
+        if (!quotation) {
+            console.warn(`⚠️ Odoo Quotation Push: Quotation ${quotationId} not found.`);
+            return;
+        }
+        if (!quotation.customerId) {
+            console.warn(`⚠️ Odoo Quotation Push: Quotation ${quotationId} has no customer linked.`);
+            return;
+        }
+        let partnerOdooId = quotation.customer?.odooId ?? null;
+        // If the customer has no Odoo ID locally, search Odoo or create them
+        if (!partnerOdooId && quotation.customer) {
+            const customerName = quotation.customer.name;
+            const customerPhone = quotation.customer.phone;
+            // 1. Search Odoo by phone or name
+            let odooPartners = [];
+            if (customerPhone) {
+                odooPartners = await odoo_service_1.default.search('res.partner', [
+                    ['phone', '=', customerPhone]
+                ]);
+            }
+            if (odooPartners.length === 0) {
+                odooPartners = await odoo_service_1.default.search('res.partner', [
+                    ['name', '=', customerName]
+                ]);
+            }
+            if (odooPartners.length > 0) {
+                partnerOdooId = odooPartners[0];
+                console.log(`ℹ️ Odoo: Found existing partner in Odoo with ID ${partnerOdooId} for ${customerName}`);
+            }
+            else {
+                // 2. Create a new partner in Odoo
+                partnerOdooId = await odoo_service_1.default.create('res.partner', {
+                    name: customerName,
+                    phone: customerPhone || false,
+                    street: quotation.customer.address || false,
+                    email: quotation.customer.email || false,
+                    customer_rank: 1, // Marks them as a customer in Odoo
+                });
+                console.log(`✅ Odoo: Created new partner in Odoo with ID ${partnerOdooId} for ${customerName}`);
+            }
+            // Update our local customer record
+            await prisma_1.default.customer.update({
+                where: { id: quotation.customerId },
+                data: { odooId: partnerOdooId },
+            });
+        }
+        if (!partnerOdooId) {
+            console.warn(`⚠️ Odoo Quotation Push: Could not resolve Odoo partner ID for customer ${quotation.customerId}`);
+            return;
+        }
+        // Build sale order lines with Odoo product IDs
+        const lines = quotation.items
+            .filter(item => item.product.odooId != null)
+            .map(item => {
+            // requestedPrice overrides unitPrice if suggestedMode is active
+            const price = (item.suggestedMode && item.requestedPrice !== null)
+                ? item.requestedPrice
+                : item.unitPrice;
+            return {
+                productId: item.product.odooId,
+                qty: item.quantity,
+                price,
+                discount: item.discountPct,
+            };
+        });
+        if (lines.length === 0) {
+            console.warn(`⚠️ Odoo Quotation Push: No valid Odoo product IDs found in quotation ${quotationId}`);
+            return;
+        }
+        // Pushing to Odoo as a draft Sale Order (represents a Quotation in Odoo)
+        const odooSaleId = await odoo_service_1.default.createSaleOrder(partnerOdooId, lines);
+        // Update local quotation with the Odoo Sale Order ID
+        await prisma_1.default.quotation.update({
+            where: { id: quotationId },
+            data: { odooSaleId },
+        });
+        console.log(`✅ Odoo: Quotation ${quotationId} successfully synced to Odoo as draft SO ${odooSaleId}`);
+    }
+    catch (err) {
+        console.error(`❌ Odoo Quotation Push Error for quotation ${quotationId}:`, err?.message);
+    }
 }
 // ─── POST /api/v1/salesman/quotations ────────────────────────────────────────
 const createQuotation = async (req, res) => {
@@ -341,6 +441,10 @@ const updateQuotationStatus = async (req, res) => {
             where: { id },
             data: updateData,
         });
+        // Sync to Odoo on approval (Option A)
+        if (status === 'APPROVED') {
+            pushQuotationToOdoo(id).catch((err) => console.error(`⚠️ Failed to sync approved quotation ${id} to Odoo:`, err?.message));
+        }
         res.json({ success: true, message: `Quotation status updated to ${status}`, data: updated });
     }
     catch (err) {
@@ -524,4 +628,39 @@ const getProducts = async (req, res) => {
     }
 };
 exports.getProducts = getProducts;
+// ─── GET /api/v1/salesman/dashboard ──────────────────────────────────────────
+const getDashboardStats = async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        const userRole = req.user.role;
+        // Filter by the logged-in salesman, or allow admin/manager to filter by a specific salesmanId query param
+        const targetSalesmanId = (userRole === 'ADMIN' || userRole === 'MANAGER') && req.query.salesmanId
+            ? String(req.query.salesmanId)
+            : userId;
+        const [totalQuotations, pendingQuotations, draftQuotations, approvedQuotations, rejectedQuotations, customerVisits,] = await Promise.all([
+            prisma_1.default.quotation.count({ where: { salesmanId: targetSalesmanId } }),
+            prisma_1.default.quotation.count({ where: { salesmanId: targetSalesmanId, status: 'SUBMITTED' } }),
+            prisma_1.default.quotation.count({ where: { salesmanId: targetSalesmanId, status: 'DRAFT' } }),
+            prisma_1.default.quotation.count({ where: { salesmanId: targetSalesmanId, status: 'APPROVED' } }),
+            prisma_1.default.quotation.count({ where: { salesmanId: targetSalesmanId, status: 'REJECTED' } }),
+            prisma_1.default.customerVisit.count({ where: { salesmanId: targetSalesmanId } }),
+        ]);
+        res.json({
+            success: true,
+            data: {
+                totalQuotations,
+                pendingQuotations,
+                draftQuotations,
+                approvedQuotations,
+                rejectedQuotations,
+                customerVisits,
+            },
+        });
+    }
+    catch (err) {
+        console.error('Get Salesman Dashboard Stats Error:', err);
+        res.status(500).json({ success: false, error: 'Failed to retrieve dashboard stats' });
+    }
+};
+exports.getDashboardStats = getDashboardStats;
 //# sourceMappingURL=salesman.controller.js.map

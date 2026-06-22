@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import prisma from '../utils/prisma';
 import { AuthRequest } from '../types';
+import odoo from '../services/odoo/odoo.service';
 
 /**
  * Ensures that a customer exists in the Customer table.
@@ -33,6 +34,118 @@ async function ensureCustomerExists(customerId: string): Promise<boolean> {
     return false;
   }
   return true;
+}
+
+/**
+ * Pushes an approved quotation to Odoo as a draft Sale Order.
+ * Resolves or registers the customer in Odoo if needed.
+ */
+async function pushQuotationToOdoo(quotationId: string): Promise<void> {
+  try {
+    const quotation = await prisma.quotation.findUnique({
+      where: { id: quotationId },
+      include: {
+        customer: true,
+        items: {
+          include: {
+            product: { select: { odooId: true } },
+          },
+        },
+      },
+    });
+
+    if (!quotation) {
+      console.warn(`⚠️ Odoo Quotation Push: Quotation ${quotationId} not found.`);
+      return;
+    }
+
+    if (!quotation.customerId) {
+      console.warn(`⚠️ Odoo Quotation Push: Quotation ${quotationId} has no customer linked.`);
+      return;
+    }
+
+    let partnerOdooId = quotation.customer?.odooId ?? null;
+
+    // If the customer has no Odoo ID locally, search Odoo or create them
+    if (!partnerOdooId && quotation.customer) {
+      const customerName = quotation.customer.name;
+      const customerPhone = quotation.customer.phone;
+
+      // 1. Search Odoo by phone or name
+      let odooPartners: number[] = [];
+      if (customerPhone) {
+        odooPartners = await odoo.search('res.partner', [
+          ['phone', '=', customerPhone]
+        ]);
+      }
+      if (odooPartners.length === 0) {
+        odooPartners = await odoo.search('res.partner', [
+          ['name', '=', customerName]
+        ]);
+      }
+
+      if (odooPartners.length > 0) {
+        partnerOdooId = odooPartners[0];
+        console.log(`ℹ️ Odoo: Found existing partner in Odoo with ID ${partnerOdooId} for ${customerName}`);
+      } else {
+        // 2. Create a new partner in Odoo
+        partnerOdooId = await odoo.create('res.partner', {
+          name: customerName,
+          phone: customerPhone || false,
+          street: quotation.customer.address || false,
+          email: quotation.customer.email || false,
+          customer_rank: 1, // Marks them as a customer in Odoo
+        });
+        console.log(`✅ Odoo: Created new partner in Odoo with ID ${partnerOdooId} for ${customerName}`);
+      }
+
+      // Update our local customer record
+      await prisma.customer.update({
+        where: { id: quotation.customerId },
+        data: { odooId: partnerOdooId },
+      });
+    }
+
+    if (!partnerOdooId) {
+      console.warn(`⚠️ Odoo Quotation Push: Could not resolve Odoo partner ID for customer ${quotation.customerId}`);
+      return;
+    }
+
+    // Build sale order lines with Odoo product IDs
+    const lines = quotation.items
+      .filter(item => item.product.odooId != null)
+      .map(item => {
+        // requestedPrice overrides unitPrice if suggestedMode is active
+        const price = (item.suggestedMode && item.requestedPrice !== null)
+          ? item.requestedPrice
+          : item.unitPrice;
+
+        return {
+          productId: item.product.odooId!,
+          qty: item.quantity,
+          price,
+          discount: item.discountPct,
+        };
+      });
+
+    if (lines.length === 0) {
+      console.warn(`⚠️ Odoo Quotation Push: No valid Odoo product IDs found in quotation ${quotationId}`);
+      return;
+    }
+
+    // Pushing to Odoo as a draft Sale Order (represents a Quotation in Odoo)
+    const odooSaleId = await odoo.createSaleOrder(partnerOdooId, lines);
+
+    // Update local quotation with the Odoo Sale Order ID
+    await prisma.quotation.update({
+      where: { id: quotationId },
+      data: { odooSaleId },
+    });
+
+    console.log(`✅ Odoo: Quotation ${quotationId} successfully synced to Odoo as draft SO ${odooSaleId}`);
+  } catch (err: any) {
+    console.error(`❌ Odoo Quotation Push Error for quotation ${quotationId}:`, err?.message);
+  }
 }
 
 // ─── POST /api/v1/salesman/quotations ────────────────────────────────────────
@@ -373,6 +486,13 @@ export const updateQuotationStatus = async (req: AuthRequest, res: Response): Pr
       where: { id },
       data: updateData,
     });
+
+    // Sync to Odoo on approval (Option A)
+    if (status === 'APPROVED') {
+      pushQuotationToOdoo(id).catch((err) =>
+        console.error(`⚠️ Failed to sync approved quotation ${id} to Odoo:`, err?.message)
+      );
+    }
 
     res.json({ success: true, message: `Quotation status updated to ${status}`, data: updated });
   } catch (err) {

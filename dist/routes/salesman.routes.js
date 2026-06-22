@@ -7,6 +7,8 @@ const validators_1 = require("../middleware/validators");
 const router = (0, express_1.Router)();
 // Require authentication for all salesman routes
 router.use(auth_1.authenticate);
+// Dashboard Stats
+router.get('/dashboard', (0, auth_1.authorizeRoles)('SALESMAN', 'MANAGER', 'ADMIN'), salesman_controller_1.getDashboardStats);
 // B2B Quotations Management
 router.post('/quotations', (0, auth_1.authorizeRoles)('SALESMAN', 'MANAGER', 'ADMIN'), validators_1.createQuotationRules, validators_1.validate, salesman_controller_1.createQuotation);
 router.get('/quotations', (0, auth_1.authorizeRoles)('SALESMAN', 'MANAGER', 'ADMIN'), salesman_controller_1.getQuotations);

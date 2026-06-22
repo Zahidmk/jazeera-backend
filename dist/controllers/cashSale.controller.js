@@ -253,11 +253,55 @@ async function pushSaleToOdoo(saleId, customerId, cart, vanId) {
     // Get the customer's odooId
     const customer = await prisma_1.default.customer.findUnique({
         where: { id: customerId },
-        select: { odooId: true },
+        select: { odooId: true, name: true, phone: true, email: true, address: true },
     });
-    if (!customer?.odooId) {
-        console.warn(`⚠️  Customer ${customerId} has no odooId — skipping Odoo sale push`);
+    if (!customer) {
+        console.warn(`⚠️  Customer ${customerId} not found — skipping Odoo sale push`);
         return;
+    }
+    let partnerOdooId = customer.odooId;
+    // If the customer has no Odoo ID locally, search Odoo or create them
+    if (!partnerOdooId) {
+        try {
+            const customerName = customer.name;
+            const customerPhone = customer.phone;
+            // 1. Search Odoo by phone or name
+            let odooPartners = [];
+            if (customerPhone) {
+                odooPartners = await odoo_service_1.default.search('res.partner', [
+                    ['phone', '=', customerPhone]
+                ]);
+            }
+            if (odooPartners.length === 0) {
+                odooPartners = await odoo_service_1.default.search('res.partner', [
+                    ['name', '=', customerName]
+                ]);
+            }
+            if (odooPartners.length > 0) {
+                partnerOdooId = odooPartners[0];
+                console.log(`ℹ️ Odoo: Found existing partner in Odoo with ID ${partnerOdooId} for ${customerName}`);
+            }
+            else {
+                // 2. Create a new partner in Odoo
+                partnerOdooId = await odoo_service_1.default.create('res.partner', {
+                    name: customerName,
+                    phone: customerPhone || false,
+                    street: customer.address || false,
+                    email: customer.email || false,
+                    customer_rank: 1, // Marks them as a customer in Odoo
+                });
+                console.log(`✅ Odoo: Created new partner in Odoo with ID ${partnerOdooId} for ${customerName}`);
+            }
+            // Update our local customer record
+            await prisma_1.default.customer.update({
+                where: { id: customerId },
+                data: { odooId: partnerOdooId },
+            });
+        }
+        catch (err) {
+            console.error(`⚠️ Odoo Partner Creation Failed for customer ${customerId}:`, err?.message);
+            return; // Skip sync as we need a partner ID
+        }
     }
     // Build sale order lines with Odoo product IDs
     const lines = await Promise.all(cart.map(async (item) => {
@@ -278,7 +322,7 @@ async function pushSaleToOdoo(saleId, customerId, cart, vanId) {
         return;
     }
     // 1. Create the sale order in Odoo
-    const odooSaleId = await odoo_service_1.default.createSaleOrder(customer.odooId, validLines);
+    const odooSaleId = await odoo_service_1.default.createSaleOrder(partnerOdooId, validLines);
     await prisma_1.default.cashSale.update({ where: { id: saleId }, data: { odooSaleId } });
     console.log(`✅ Odoo: Cash sale ${saleId} → SO created with odooSaleId: ${odooSaleId}`);
     // 2. Get the van's Odoo stock location (find/create if needed)
