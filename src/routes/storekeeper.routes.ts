@@ -11,6 +11,7 @@ import {
   reportDamagedStock,
   getReconciliation,
   submitReconciliation,
+  getDriversList,
 } from '../controllers/storekeeper.controller';
 import { assignVanLoadRules, validate } from '../middleware/validators';
 
@@ -30,6 +31,7 @@ router.post('/vans/:vanId/load', assignVanLoadRules, validate, assignVanLoad);
 router.get('/dashboard', getDashboard);
 router.get('/warehouse-stock', getWarehouseStock);
 router.post('/drivers/search', searchDrivers);
+router.get('/drivers', getDriversList);
 router.get('/damaged-stock', getDamagedStock);
 router.post('/damaged-stock', reportDamagedStock);
 router.get('/vans/:vanId/reconciliation', getReconciliation);

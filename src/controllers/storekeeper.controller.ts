@@ -855,3 +855,35 @@ async function pushAdjustmentToOdooBackground(
     console.warn(`⚠️ Odoo: No quant found for product ${product.odooId} in van location ${vanLocationId}`);
   }
 }
+
+// ─── GET /api/v1/storekeeper/drivers ──────────────────────────────────────────
+export const getDriversList = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const drivers = await prisma.user.findMany({
+      where: {
+        role: 'DRIVER',
+        isActive: true,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        van: {
+          select: {
+            id: true,
+            plateNumber: true,
+            model: true,
+          },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    res.json({ success: true, data: drivers });
+  } catch (err) {
+    console.error('Error fetching drivers list for storekeeper:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch drivers list' });
+  }
+};
+
