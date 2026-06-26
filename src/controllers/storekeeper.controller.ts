@@ -476,7 +476,11 @@ export const getDamagedStock = async (req: AuthRequest, res: Response): Promise<
           lt: end,
         },
       },
-      include: {
+      select: {
+        id: true,
+        quantity: true,
+        notes: true,
+        createdAt: true,
         product: {
           select: {
             id: true,

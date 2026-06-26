@@ -670,6 +670,7 @@ export const getVanWarehouse = async (req: Request, res: Response): Promise<void
     const adjustments = driverIds.length > 0
       ? await prisma.stockAdjustment.findMany({
           where: { driverId: { in: driverIds }, reason: 'DAMAGE', createdAt: { gte: dayStart, lte: dayEnd } },
+          select: { productId: true, quantity: true },   // explicit select — avoids missing imageUrl column crash
         })
       : [];
 
