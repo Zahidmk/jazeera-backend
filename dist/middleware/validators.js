@@ -59,7 +59,7 @@ exports.addLeadRules = [
 exports.stockAdjustRules = [
     (0, express_validator_1.body)('productId').isUUID().withMessage('Valid productId (UUID) is required'),
     (0, express_validator_1.body)('quantity').isInt({ min: 1 }).withMessage('Quantity must be a positive integer'),
-    (0, express_validator_1.body)('reason').isIn(['DAMAGE', 'EXPIRY', 'THEFT', 'OTHER']).withMessage('Invalid adjustment reason'),
+    (0, express_validator_1.body)('reason').isIn(['DAMAGE', 'EXPIRY', 'RETURN', 'OTHER']).withMessage('Invalid adjustment reason'),
     (0, express_validator_1.body)('notes').optional().isLength({ max: 500 }).trim().escape(),
 ];
 // ─── Admin report export ──────────────────────────────────────────────────────

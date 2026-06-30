@@ -494,31 +494,41 @@ const adjustStock = async (req, res) => {
             res.status(400).json({ success: false, error: `Reason must be one of: ${validReasons.join(', ')}` });
             return;
         }
-        const van = await prisma_1.default.van.findFirst({ where: { driverId } });
-        if (!van) {
+        // Drivers might be assigned a van via a Shift, so check shift first
+        const shift = await prisma_1.default.shift.findFirst({
+            where: { driverId, status: 'ACTIVE' },
+            orderBy: { startedAt: 'desc' },
+        });
+        let vanId = shift?.vanId;
+        if (!vanId) {
+            const defaultVan = await prisma_1.default.van.findFirst({ where: { driverId } });
+            vanId = defaultVan?.id;
+        }
+        if (!vanId) {
             res.status(404).json({ success: false, error: 'No van assigned to this driver' });
             return;
         }
         const inventoryItem = await prisma_1.default.vanInventory.findUnique({
-            where: { vanId_productId: { vanId: van.id, productId } },
+            where: { vanId_productId: { vanId, productId } },
         });
-        if (!inventoryItem || inventoryItem.quantity < Math.abs(quantity)) {
+        const adjustQty = Math.abs(Number(quantity));
+        if (!inventoryItem || inventoryItem.quantity < adjustQty) {
             res.status(400).json({ success: false, error: 'Insufficient stock for this adjustment' });
             return;
         }
         await prisma_1.default.$transaction(async (tx) => {
             await tx.vanInventory.update({
-                where: { vanId_productId: { vanId: van.id, productId } },
-                data: { quantity: { decrement: Math.abs(quantity) } },
+                where: { vanId_productId: { vanId, productId } },
+                data: { quantity: { decrement: adjustQty } },
             });
             await tx.stockAdjustment.create({
                 data: {
                     driverId,
-                    vanId: van.id,
+                    vanId,
                     productId,
-                    quantity: -Math.abs(quantity),
-                    reason,
-                    notes,
+                    quantity: -adjustQty,
+                    reason: reason,
+                    notes: notes || null,
                     status: 'PENDING'
                 },
             });
@@ -526,8 +536,15 @@ const adjustStock = async (req, res) => {
         res.json({ success: true, message: 'Stock damage reported and is pending storekeeper approval' });
     }
     catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, error: 'Failed to adjust stock' });
+        console.error("Adjust Stock Error:", err);
+        console.error("Message:", err?.message);
+        console.error("Code:", err?.code);
+        console.error("Meta:", err?.meta);
+        console.error(err?.stack);
+        res.status(500).json({
+            success: false,
+            error: err?.message || "Failed to adjust stock"
+        });
     }
 };
 exports.adjustStock = adjustStock;

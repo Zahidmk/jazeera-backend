@@ -464,6 +464,11 @@ const getDamagedStock = async (req, res) => {
                     select: {
                         id: true,
                         name: true,
+                        van: {
+                            select: {
+                                plateNumber: true,
+                            }
+                        }
                     },
                 },
             },
@@ -471,17 +476,17 @@ const getDamagedStock = async (req, res) => {
                 createdAt: 'desc',
             },
         });
-        const totalDamageCount = adjustments.reduce((sum, adj) => sum + Math.abs(adj.quantity), 0);
+        const totalDamageCount = adjustments.reduce((sum, adj) => sum + Math.abs(adj.quantity || 0), 0);
         const items = adjustments.map((adj) => ({
             adjustmentId: adj.id,
-            productId: adj.product.id,
-            productName: adj.product.name,
-            sku: adj.product.sku,
-            productImage: adj.product.imageUrl,
+            productId: adj.product?.id || 'Unknown',
+            productName: adj.product?.name || 'Unknown',
+            sku: adj.product?.sku || 'Unknown',
+            productImage: adj.product?.imageUrl || null,
             proofImage: adj.imageUrl,
-            quantity: Math.abs(adj.quantity),
-            vanNumber: adj.van?.plateNumber || adj.driver.van?.plateNumber || 'No Van',
-            driverName: adj.driver.name,
+            quantity: Math.abs(adj.quantity || 0),
+            vanNumber: adj.van?.plateNumber || adj.driver?.van?.plateNumber || 'No Van',
+            driverName: adj.driver?.name || 'Unknown',
             uploadedAt: adj.createdAt,
             reason: adj.notes || 'Damage reported',
             status: adj.status,

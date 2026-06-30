@@ -600,9 +600,17 @@ export const adjustStock = async (req: AuthRequest, res: Response): Promise<void
     });
 
     res.json({ success: true, message: 'Stock damage reported and is pending storekeeper approval' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, error: 'Failed to adjust stock' });
+  } catch (err: any) {
+    console.error("Adjust Stock Error:", err);
+    console.error("Message:", err?.message);
+    console.error("Code:", err?.code);
+    console.error("Meta:", err?.meta);
+    console.error(err?.stack);
+
+    res.status(500).json({
+      success: false,
+      error: err?.message || "Failed to adjust stock"
+    });
   }
 };
 
