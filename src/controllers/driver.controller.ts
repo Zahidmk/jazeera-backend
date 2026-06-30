@@ -553,34 +553,47 @@ export const adjustStock = async (req: AuthRequest, res: Response): Promise<void
       return;
     }
 
-    const van = await prisma.van.findFirst({ where: { driverId } });
-    if (!van) {
+    // Drivers might be assigned a van via a Shift, so check shift first
+    const shift = await prisma.shift.findFirst({
+      where: { driverId, status: 'ACTIVE' },
+      orderBy: { startedAt: 'desc' },
+    });
+
+    let vanId = shift?.vanId;
+    if (!vanId) {
+      const defaultVan = await prisma.van.findFirst({ where: { driverId } });
+      vanId = defaultVan?.id;
+    }
+
+    if (!vanId) {
       res.status(404).json({ success: false, error: 'No van assigned to this driver' });
       return;
     }
 
     const inventoryItem = await prisma.vanInventory.findUnique({
-      where: { vanId_productId: { vanId: van.id, productId } },
+      where: { vanId_productId: { vanId, productId } },
     });
 
-    if (!inventoryItem || inventoryItem.quantity < Math.abs(quantity)) {
+    const adjustQty = Math.abs(Number(quantity));
+
+    if (!inventoryItem || inventoryItem.quantity < adjustQty) {
       res.status(400).json({ success: false, error: 'Insufficient stock for this adjustment' });
       return;
     }
 
     await prisma.$transaction(async (tx) => {
       await tx.vanInventory.update({
-        where: { vanId_productId: { vanId: van.id, productId } },
-        data: { quantity: { decrement: Math.abs(quantity) } },
+        where: { vanId_productId: { vanId, productId } },
+        data: { quantity: { decrement: adjustQty } },
       });
       await tx.stockAdjustment.create({
         data: { 
           driverId, 
-          vanId: van.id,
+          vanId,
           productId, 
-          quantity: -Math.abs(quantity), 
-          reason, 
-          notes,
+          quantity: -adjustQty, 
+          reason: reason as any, 
+          notes: notes || null,
           status: 'PENDING'
         },
       });
