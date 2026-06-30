@@ -38,8 +38,8 @@ enum ShiftStatus {
 enum AdjustmentReason {
   DAMAGE
   EXPIRY
-  THEFT
   OTHER
+  RETURN
 }
 
 enum LeadStatus {
@@ -52,6 +52,12 @@ enum LeadStatus {
 enum LoadStatus {
   PENDING
   ACCEPTED
+  REJECTED
+}
+
+enum AdjustmentStatus {
+  PENDING
+  APPROVED
   REJECTED
 }
 
@@ -92,6 +98,7 @@ model Van {
   inventory VanInventory[]
   shifts    Shift[]
   stockQueue StockLoadQueue[]
+  adjustments StockAdjustment[]
 }
 
 model Product {
@@ -277,14 +284,17 @@ model Lead {
 model StockAdjustment {
   id        String           @id @default(uuid())
   driverId  String
+  vanId     String?
   productId String
   quantity  Int
   reason    AdjustmentReason
+  status    AdjustmentStatus @default(PENDING)
   notes     String?
   imageUrl  String?
   createdAt DateTime         @default(now())
 
   driver  User    @relation(fields: [driverId], references: [id])
+  van     Van?    @relation(fields: [vanId], references: [id])
   product Product @relation(fields: [productId], references: [id])
 }
 

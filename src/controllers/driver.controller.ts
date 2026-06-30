@@ -547,7 +547,7 @@ export const adjustStock = async (req: AuthRequest, res: Response): Promise<void
     const driverId = req.user!.userId;
     const { productId, quantity, reason, notes } = req.body;
 
-    const validReasons = ['DAMAGE', 'EXPIRY', 'THEFT', 'OTHER'];
+    const validReasons = ['DAMAGE', 'EXPIRY', 'OTHER', 'RETURN'];
     if (!validReasons.includes(reason)) {
       res.status(400).json({ success: false, error: `Reason must be one of: ${validReasons.join(', ')}` });
       return;
@@ -574,16 +574,19 @@ export const adjustStock = async (req: AuthRequest, res: Response): Promise<void
         data: { quantity: { decrement: Math.abs(quantity) } },
       });
       await tx.stockAdjustment.create({
-        data: { driverId, productId, quantity: -Math.abs(quantity), reason, notes },
+        data: { 
+          driverId, 
+          vanId: van.id,
+          productId, 
+          quantity: -Math.abs(quantity), 
+          reason, 
+          notes,
+          status: 'PENDING'
+        },
       });
     });
 
-    // ── Push stock adjustment to Odoo (fire-and-forget) — use van's Odoo location
-    pushAdjustmentToOdoo(van, productId, Math.abs(quantity), reason, notes).catch((err) =>
-      console.error('⚠️  Odoo stock adjustment push failed (non-blocking):', err?.message)
-    );
-
-    res.json({ success: true, message: 'Stock adjustment recorded successfully' });
+    res.json({ success: true, message: 'Stock damage reported and is pending storekeeper approval' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: 'Failed to adjust stock' });

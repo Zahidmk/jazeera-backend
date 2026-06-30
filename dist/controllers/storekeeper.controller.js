@@ -3,7 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.submitReconciliation = exports.getReconciliation = exports.reportDamagedStock = exports.getDamagedStock = exports.searchDrivers = exports.getWarehouseStock = exports.getDashboard = exports.assignVanLoad = exports.getVanQueue = exports.getVans = void 0;
+exports.getDriversList = exports.submitReconciliation = exports.getReconciliation = exports.resolveDamagedStock = exports.reportDamagedStock = exports.getDamagedStock = exports.searchDrivers = exports.getWarehouseStock = exports.getDashboard = exports.assignVanLoad = exports.getVanQueue = exports.getVans = void 0;
+const uuid_1 = require("uuid");
 const prisma_1 = __importDefault(require("../utils/prisma"));
 const odoo_service_1 = __importDefault(require("../services/odoo/odoo.service"));
 // ─── GET /api/v1/storekeeper/vans ──────────────────────────────────────────
@@ -70,27 +71,35 @@ exports.getVans = getVans;
 const getVanQueue = async (req, res) => {
     try {
         const { vanId } = req.params;
-        const shift = await prisma_1.default.shift.findFirst({
-            where: { vanId, status: 'ACTIVE' },
+        const van = await prisma_1.default.van.findUnique({
+            where: { id: vanId },
             include: {
                 driver: {
-                    select: {
-                        id: true,
-                        name: true,
+                    select: { id: true, name: true },
+                },
+                shifts: {
+                    where: { status: 'ACTIVE' },
+                    include: {
+                        driver: { select: { id: true, name: true } },
                     },
+                    orderBy: { startedAt: 'desc' },
+                    take: 1,
                 },
             },
-            orderBy: { startedAt: 'desc' },
         });
-        if (!shift) {
-            res.status(400).json({
-                success: false,
-                error: 'No active shift found for this van. Please have the driver start their shift first.',
-            });
+        if (!van) {
+            res.status(404).json({ success: false, error: 'Van not found' });
             return;
         }
+        const activeShift = van.shifts[0];
         const queue = await prisma_1.default.stockLoadQueue.findMany({
-            where: { shiftId: shift.id },
+            where: {
+                vanId,
+                OR: [
+                    { confirmed: false },
+                    activeShift ? { shiftId: activeShift.id, confirmed: true } : { id: 'no-match' }
+                ]
+            },
             include: {
                 product: {
                     select: {
@@ -108,11 +117,8 @@ const getVanQueue = async (req, res) => {
             success: true,
             data: queue,
             meta: {
-                driver: {
-                    id: shift.driver.id,
-                    name: shift.driver.name,
-                },
-                shiftId: shift.id,
+                driver: activeShift ? activeShift.driver : (van.driver || null),
+                shiftId: activeShift ? activeShift.id : null,
             },
         });
     }
@@ -131,18 +137,6 @@ const assignVanLoad = async (req, res) => {
             res.status(400).json({ success: false, error: 'Products list is required' });
             return;
         }
-        // Find the active shift
-        const shift = await prisma_1.default.shift.findFirst({
-            where: { vanId, status: 'ACTIVE' },
-            orderBy: { startedAt: 'desc' },
-        });
-        if (!shift) {
-            res.status(400).json({
-                success: false,
-                error: 'No active shift found for this van. Please have the driver start their shift first.',
-            });
-            return;
-        }
         // Validate products list
         for (const item of products) {
             if (!item.productId || typeof item.quantity !== 'number' || item.quantity <= 0) {
@@ -155,34 +149,38 @@ const assignVanLoad = async (req, res) => {
         }
         // Check if any of these products are already accepted (confirmed: true) in the active shift
         const productIds = products.map((p) => p.productId);
-        const existingConfirmed = await prisma_1.default.stockLoadQueue.findMany({
-            where: {
-                shiftId: shift.id,
-                productId: { in: productIds },
-                confirmed: true,
-            },
-            include: {
-                product: {
-                    select: {
-                        name: true,
+        const shift = await prisma_1.default.shift.findFirst({
+            where: { vanId, status: 'ACTIVE' },
+            orderBy: { startedAt: 'desc' },
+        });
+        if (shift) {
+            const existingConfirmed = await prisma_1.default.stockLoadQueue.findMany({
+                where: {
+                    shiftId: shift.id,
+                    productId: { in: productIds },
+                    confirmed: true,
+                },
+                include: {
+                    product: {
+                        select: { name: true },
                     },
                 },
-            },
-        });
-        if (existingConfirmed.length > 0) {
-            const names = existingConfirmed.map((item) => item.product.name).join(', ');
-            res.status(400).json({
-                success: false,
-                error: `The following products have already been loaded and accepted in this shift: ${names}.`,
             });
-            return;
+            if (existingConfirmed.length > 0) {
+                const names = existingConfirmed.map((item) => item.product.name).join(', ');
+                res.status(400).json({
+                    success: false,
+                    error: `The following products have already been loaded and accepted in this shift: ${names}.`,
+                });
+                return;
+            }
         }
         // Transactionally update the stock load queue
         await prisma_1.default.$transaction(async (tx) => {
-            // Delete existing unconfirmed (PENDING or REJECTED) queue items for this shift
+            // Delete existing unconfirmed (PENDING or REJECTED) queue items for this van
             await tx.stockLoadQueue.deleteMany({
                 where: {
-                    shiftId: shift.id,
+                    vanId,
                     confirmed: false,
                 },
             });
@@ -190,7 +188,9 @@ const assignVanLoad = async (req, res) => {
             if (products.length > 0) {
                 await tx.stockLoadQueue.createMany({
                     data: products.map((item) => ({
-                        shiftId: shift.id,
+                        id: (0, uuid_1.v4)(),
+                        vanId,
+                        shiftId: null,
                         productId: item.productId,
                         quantity: item.quantity,
                         confirmed: false,
@@ -357,11 +357,15 @@ const searchDrivers = async (req, res) => {
                     : undefined,
             },
             include: {
-                van: true,
+                van: {
+                    include: {
+                        stockQueue: { where: { confirmed: false } }
+                    }
+                },
                 shifts: {
                     where: { status: 'ACTIVE' },
                     include: {
-                        stockQueue: true,
+                        stockQueue: { where: { confirmed: true } }
                     },
                 },
             },
@@ -370,7 +374,10 @@ const searchDrivers = async (req, res) => {
         const data = drivers.map((driver) => {
             const activeShift = driver.shifts[0];
             const vanNumber = driver.van?.plateNumber || 'No Van';
-            if (!activeShift) {
+            const unconfirmedQueue = driver.van?.stockQueue || [];
+            const confirmedQueue = activeShift?.stockQueue || [];
+            const queueItems = [...unconfirmedQueue, ...confirmedQueue];
+            if (!activeShift && unconfirmedQueue.length === 0) {
                 return {
                     driverId: driver.id,
                     driverName: driver.name,
@@ -380,7 +387,6 @@ const searchDrivers = async (req, res) => {
                     status: 'NONE',
                 };
             }
-            const queueItems = activeShift.stockQueue;
             const totalLoadedItems = queueItems.reduce((sum, item) => sum + item.quantity, 0);
             let status = 'PENDING';
             if (queueItems.length > 0) {
@@ -401,7 +407,7 @@ const searchDrivers = async (req, res) => {
                 driverId: driver.id,
                 driverName: driver.name,
                 vanNumber,
-                assignedDate: activeShift.startedAt,
+                assignedDate: activeShift?.startedAt || null,
                 totalLoadedItems,
                 status,
             };
@@ -428,13 +434,19 @@ const getDamagedStock = async (req, res) => {
         end.setDate(start.getDate() + 1);
         const adjustments = await prisma_1.default.stockAdjustment.findMany({
             where: {
-                reason: 'DAMAGE',
+                reason: { in: ['DAMAGE', 'RETURN'] },
                 createdAt: {
                     gte: start,
                     lt: end,
                 },
             },
-            include: {
+            select: {
+                id: true,
+                quantity: true,
+                notes: true,
+                createdAt: true,
+                status: true,
+                imageUrl: true,
                 product: {
                     select: {
                         id: true,
@@ -443,15 +455,15 @@ const getDamagedStock = async (req, res) => {
                         imageUrl: true,
                     },
                 },
+                van: {
+                    select: {
+                        plateNumber: true,
+                    }
+                },
                 driver: {
                     select: {
                         id: true,
                         name: true,
-                        van: {
-                            select: {
-                                plateNumber: true,
-                            },
-                        },
                     },
                 },
             },
@@ -465,12 +477,14 @@ const getDamagedStock = async (req, res) => {
             productId: adj.product.id,
             productName: adj.product.name,
             sku: adj.product.sku,
-            imageUrl: adj.product.imageUrl,
+            productImage: adj.product.imageUrl,
+            proofImage: adj.imageUrl,
             quantity: Math.abs(adj.quantity),
-            vanNumber: adj.driver.van?.plateNumber || 'No Van',
+            vanNumber: adj.van?.plateNumber || adj.driver.van?.plateNumber || 'No Van',
             driverName: adj.driver.name,
             uploadedAt: adj.createdAt,
             reason: adj.notes || 'Damage reported',
+            status: adj.status,
         }));
         res.json({
             success: true,
@@ -495,7 +509,7 @@ const reportDamagedStock = async (req, res) => {
             res.status(400).json({ success: false, error: 'productId, vanId, and a positive quantity are required' });
             return;
         }
-        const validReasons = ['DAMAGE', 'EXPIRY', 'THEFT', 'OTHER'];
+        const validReasons = ['DAMAGE', 'EXPIRY', 'OTHER'];
         if (!validReasons.includes(reason)) {
             res.status(400).json({ success: false, error: `Reason must be one of: ${validReasons.join(', ')}` });
             return;
@@ -535,9 +549,11 @@ const reportDamagedStock = async (req, res) => {
             await tx.stockAdjustment.create({
                 data: {
                     driverId,
+                    vanId,
                     productId,
                     quantity: -quantity,
                     reason: reason,
+                    status: 'APPROVED',
                     notes: notes || 'Damage reported by storekeeper',
                     imageUrl: imageUrl || null,
                 },
@@ -552,6 +568,62 @@ const reportDamagedStock = async (req, res) => {
     }
 };
 exports.reportDamagedStock = reportDamagedStock;
+// ─── POST /api/v1/storekeeper/damaged-stock/:id/resolve ────────────────────────
+const resolveDamagedStock = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { action, notes } = req.body; // 'APPROVE' or 'REJECT'
+        if (!['APPROVE', 'REJECT'].includes(action)) {
+            res.status(400).json({ success: false, error: 'Invalid action. Must be APPROVE or REJECT' });
+            return;
+        }
+        const adjustment = await prisma_1.default.stockAdjustment.findUnique({
+            where: { id },
+            include: {
+                van: true,
+            },
+        });
+        if (!adjustment) {
+            res.status(404).json({ success: false, error: 'Stock adjustment not found' });
+            return;
+        }
+        if (adjustment.status !== 'PENDING') {
+            res.status(400).json({ success: false, error: `Adjustment is already ${adjustment.status}` });
+            return;
+        }
+        await prisma_1.default.$transaction(async (tx) => {
+            if (action === 'REJECT') {
+                // Return stock to van
+                if (adjustment.vanId) {
+                    await tx.vanInventory.upsert({
+                        where: { vanId_productId: { vanId: adjustment.vanId, productId: adjustment.productId } },
+                        update: { quantity: { increment: Math.abs(adjustment.quantity) } },
+                        create: { vanId: adjustment.vanId, productId: adjustment.productId, quantity: Math.abs(adjustment.quantity) },
+                    });
+                }
+                await tx.stockAdjustment.update({
+                    where: { id },
+                    data: { status: 'REJECTED', notes: notes || adjustment.notes },
+                });
+            }
+            else if (action === 'APPROVE') {
+                await tx.stockAdjustment.update({
+                    where: { id },
+                    data: { status: 'APPROVED', notes: notes || adjustment.notes },
+                });
+            }
+        });
+        if (action === 'APPROVE' && adjustment.van) {
+            pushAdjustmentToOdooBackground(adjustment.van, adjustment.productId, Math.abs(adjustment.quantity), adjustment.reason, notes || adjustment.notes || '').catch((err) => console.error('⚠️ Background Odoo stock adjustment push failed:', err?.message));
+        }
+        res.json({ success: true, message: `Damaged stock ${action.toLowerCase()}d successfully` });
+    }
+    catch (err) {
+        console.error('Error resolving damaged stock for storekeeper:', err);
+        res.status(500).json({ success: false, error: 'Failed to resolve damaged stock' });
+    }
+};
+exports.resolveDamagedStock = resolveDamagedStock;
 // ─── GET /api/v1/storekeeper/vans/:vanId/reconciliation ──────────────────────
 const getReconciliation = async (req, res) => {
     try {
@@ -755,5 +827,45 @@ async function pushAdjustmentToOdooBackground(van, productId, qty, reason, notes
     else {
         console.warn(`⚠️ Odoo: No quant found for product ${product.odooId} in van location ${vanLocationId}`);
     }
+    // If this is a return, we also need to add the stock back to the main warehouse
+    if (reason === 'RETURN') {
+        const warehouseLocationId = await odoo_service_1.default.getWarehouseStockLocationId();
+        const warehouseQuants = await odoo_service_1.default.searchRead('stock.quant', [['product_id', '=', product.odooId], ['location_id', '=', warehouseLocationId]], ['id', 'quantity'], { limit: 1 });
+        const warehouseCurrentQty = warehouseQuants.length > 0 ? (warehouseQuants[0].quantity ?? 0) : 0;
+        const warehouseNewQty = warehouseCurrentQty + qty;
+        await odoo_service_1.default.createInventoryAdjustment(product.odooId, warehouseLocationId, warehouseNewQty, reason);
+        console.log(`✅ Odoo: Stock returned to warehouse ${warehouseLocationId} for ${product.name} — ${warehouseCurrentQty} → ${warehouseNewQty}`);
+    }
 }
+// ─── GET /api/v1/storekeeper/drivers ──────────────────────────────────────────
+const getDriversList = async (req, res) => {
+    try {
+        const drivers = await prisma_1.default.user.findMany({
+            where: {
+                role: 'DRIVER',
+                isActive: true,
+            },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                phone: true,
+                van: {
+                    select: {
+                        id: true,
+                        plateNumber: true,
+                        model: true,
+                    },
+                },
+            },
+            orderBy: { name: 'asc' },
+        });
+        res.json({ success: true, data: drivers });
+    }
+    catch (err) {
+        console.error('Error fetching drivers list for storekeeper:', err);
+        res.status(500).json({ success: false, error: 'Failed to fetch drivers list' });
+    }
+};
+exports.getDriversList = getDriversList;
 //# sourceMappingURL=storekeeper.controller.js.map

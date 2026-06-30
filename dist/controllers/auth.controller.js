@@ -24,7 +24,13 @@ const login = async (req, res) => {
                     { phone: phone ?? undefined },
                 ],
             },
-            include: { van: { select: { id: true, plateNumber: true } } },
+            include: {
+                van: { select: { id: true, plateNumber: true } },
+                shifts: {
+                    where: { status: 'ACTIVE' },
+                    take: 1
+                }
+            },
         });
         console.log("USER FOUND:", !!user);
         if (!user) {
@@ -38,10 +44,12 @@ const login = async (req, res) => {
             return;
         }
         const token = jsonwebtoken_1.default.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        const isShiftStarted = user.shifts && user.shifts.length > 0;
         res.json({
             success: true,
             data: {
                 token,
+                isShiftStarted,
                 user: {
                     id: user.id,
                     name: user.name,
@@ -49,6 +57,7 @@ const login = async (req, res) => {
                     phone: user.phone,
                     role: user.role,
                     van: user.van,
+                    isShiftStarted,
                 },
             },
         });
@@ -71,13 +80,19 @@ const getMe = async (req, res) => {
                 phone: true,
                 role: true,
                 van: { select: { id: true, plateNumber: true, model: true } },
+                shifts: {
+                    where: { status: 'ACTIVE' },
+                    take: 1
+                }
             },
         });
         if (!user) {
             res.status(404).json({ success: false, error: 'User not found' });
             return;
         }
-        res.json({ success: true, data: user });
+        const { shifts, ...userData } = user;
+        const isShiftStarted = shifts && shifts.length > 0;
+        res.json({ success: true, data: { ...userData, isShiftStarted } });
     }
     catch (err) {
         console.error(err);

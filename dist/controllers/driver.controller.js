@@ -10,23 +10,45 @@ const odoo_service_1 = __importDefault(require("../services/odoo/odoo.service"))
 const getHome = async (req, res) => {
     try {
         const driverId = req.user.userId;
-        const [driver, deliveries, vanInventory] = await Promise.all([
+        // Today's date range (midnight → midnight, local calendar day)
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date();
+        todayEnd.setHours(23, 59, 59, 999);
+        const [driver, vanInventory, todaySales, todayDeliveredItems] = await Promise.all([
+            // Driver profile + van plate
             prisma_1.default.user.findUnique({
                 where: { id: driverId },
                 select: { id: true, name: true, van: { select: { plateNumber: true } } },
             }),
-            prisma_1.default.delivery.findMany({
-                where: { driverId, status: { in: ['PENDING', 'IN_PROGRESS'] } },
-                select: { id: true, status: true },
-            }),
+            // Total stock units currently on van
             prisma_1.default.vanInventory.aggregate({
                 where: { van: { driverId } },
                 _sum: { quantity: true },
             }),
+            // Today's cash sales summary
+            prisma_1.default.cashSale.aggregate({
+                where: {
+                    driverId,
+                    createdAt: { gte: todayStart, lte: todayEnd },
+                },
+                _sum: { totalAmount: true },
+                _count: true,
+            }),
+            // Today's collection: sum of (unitPrice × quantity) for all DELIVERED delivery items today
+            prisma_1.default.deliveryItem.findMany({
+                where: {
+                    delivery: {
+                        driverId,
+                        status: 'DELIVERED',
+                        deliveredAt: { gte: todayStart, lte: todayEnd },
+                    },
+                },
+                select: { unitPrice: true, quantity: true },
+            }),
         ]);
-        const totalDeliveries = deliveries.length;
-        const pendingDeliveries = deliveries.filter(d => d.status === 'PENDING').length;
-        const completedDeliveries = deliveries.filter(d => d.status === 'IN_PROGRESS').length;
+        // Collection = sum of (unitPrice × qty) across all delivered items today
+        const todayCollectionAmount = todayDeliveredItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
         res.json({
             success: true,
             data: {
@@ -35,10 +57,16 @@ const getHome = async (req, res) => {
                     van: driver?.van?.plateNumber ?? 'Not Assigned',
                 },
                 stats: {
-                    totalDeliveries,
-                    pendingDeliveries,
-                    completedDeliveries,
                     totalStockItems: vanInventory._sum.quantity ?? 0,
+                },
+                todaySummary: {
+                    sales: {
+                        count: todaySales._count,
+                        totalAmount: parseFloat((todaySales._sum.totalAmount ?? 0).toFixed(2)),
+                    },
+                    collection: {
+                        totalAmount: parseFloat(todayCollectionAmount.toFixed(2)),
+                    },
                 },
             },
         });
@@ -294,7 +322,7 @@ const getStockQueue = async (req, res) => {
             return;
         }
         const queue = await prisma_1.default.stockLoadQueue.findMany({
-            where: { shiftId: shift.id, confirmed: false },
+            where: { vanId: shift.vanId, confirmed: false },
             include: { product: { select: { id: true, name: true, sku: true, unit: true, imageUrl: true } } },
         });
         res.json({ success: true, data: queue });
@@ -319,7 +347,7 @@ const confirmStockLoad = async (req, res) => {
             return;
         }
         const queueItems = await prisma_1.default.stockLoadQueue.findMany({
-            where: { shiftId: shift.id, confirmed: false },
+            where: { vanId: shift.vanId, confirmed: false },
             include: { product: { select: { id: true, name: true, odooId: true } } },
         });
         if (queueItems.length === 0) {
@@ -336,8 +364,8 @@ const confirmStockLoad = async (req, res) => {
                 });
             }
             await tx.stockLoadQueue.updateMany({
-                where: { shiftId: shift.id, confirmed: false },
-                data: { confirmed: true, status: 'ACCEPTED' },
+                where: { vanId: shift.vanId, confirmed: false },
+                data: { confirmed: true, status: 'ACCEPTED', shiftId: shift.id },
             });
         });
         res.json({ success: true, message: `${queueItems.length} items loaded into van successfully` });
@@ -364,14 +392,14 @@ const rejectStockLoad = async (req, res) => {
             return;
         }
         const queueItems = await prisma_1.default.stockLoadQueue.findMany({
-            where: { shiftId: shift.id, confirmed: false },
+            where: { vanId: shift.vanId, confirmed: false },
         });
         if (queueItems.length === 0) {
             res.status(400).json({ success: false, error: 'No pending items in queue to reject' });
             return;
         }
         await prisma_1.default.stockLoadQueue.updateMany({
-            where: { shiftId: shift.id, confirmed: false },
+            where: { vanId: shift.vanId, confirmed: false },
             data: {
                 status: 'REJECTED',
                 notes: notes || null,
@@ -461,7 +489,7 @@ const adjustStock = async (req, res) => {
     try {
         const driverId = req.user.userId;
         const { productId, quantity, reason, notes } = req.body;
-        const validReasons = ['DAMAGE', 'EXPIRY', 'THEFT', 'OTHER'];
+        const validReasons = ['DAMAGE', 'EXPIRY', 'OTHER', 'RETURN'];
         if (!validReasons.includes(reason)) {
             res.status(400).json({ success: false, error: `Reason must be one of: ${validReasons.join(', ')}` });
             return;
@@ -484,12 +512,18 @@ const adjustStock = async (req, res) => {
                 data: { quantity: { decrement: Math.abs(quantity) } },
             });
             await tx.stockAdjustment.create({
-                data: { driverId, productId, quantity: -Math.abs(quantity), reason, notes },
+                data: {
+                    driverId,
+                    vanId: van.id,
+                    productId,
+                    quantity: -Math.abs(quantity),
+                    reason,
+                    notes,
+                    status: 'PENDING'
+                },
             });
         });
-        // ── Push stock adjustment to Odoo (fire-and-forget) — use van's Odoo location
-        pushAdjustmentToOdoo(van, productId, Math.abs(quantity), reason, notes).catch((err) => console.error('⚠️  Odoo stock adjustment push failed (non-blocking):', err?.message));
-        res.json({ success: true, message: 'Stock adjustment recorded successfully' });
+        res.json({ success: true, message: 'Stock damage reported and is pending storekeeper approval' });
     }
     catch (err) {
         console.error(err);

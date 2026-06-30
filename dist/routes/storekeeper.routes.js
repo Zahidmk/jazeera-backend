@@ -16,8 +16,10 @@ router.post('/vans/:vanId/load', validators_1.assignVanLoadRules, validators_1.v
 router.get('/dashboard', storekeeper_controller_1.getDashboard);
 router.get('/warehouse-stock', storekeeper_controller_1.getWarehouseStock);
 router.post('/drivers/search', storekeeper_controller_1.searchDrivers);
+router.get('/drivers', storekeeper_controller_1.getDriversList);
 router.get('/damaged-stock', storekeeper_controller_1.getDamagedStock);
 router.post('/damaged-stock', storekeeper_controller_1.reportDamagedStock);
+router.post('/damaged-stock/:id/resolve', storekeeper_controller_1.resolveDamagedStock);
 router.get('/vans/:vanId/reconciliation', storekeeper_controller_1.getReconciliation);
 router.post('/vans/:vanId/reconciliation', storekeeper_controller_1.submitReconciliation);
 exports.default = router;

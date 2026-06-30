@@ -614,11 +614,16 @@ const getVanWarehouse = async (req, res) => {
             res.status(404).json({ success: false, error: 'Van not found' });
             return;
         }
-        // Shift(s) that were active on the target day for this van
+        // ── Find shifts for this van on the target day:
+        //    (1) shifts that STARTED on that day, OR
+        //    (2) shifts that are still ACTIVE (may have started on a previous day)
         const shifts = await prisma_1.default.shift.findMany({
             where: {
                 vanId: id,
-                startedAt: { gte: dayStart, lte: dayEnd },
+                OR: [
+                    { startedAt: { gte: dayStart, lte: dayEnd } }, // started on target day
+                    { status: 'ACTIVE' }, // still running (may have started earlier)
+                ],
             },
             include: {
                 driver: { select: { id: true, name: true } },
@@ -651,6 +656,13 @@ const getVanWarehouse = async (req, res) => {
                 select: { id: true, status: true, customer: { select: { name: true } } },
             })
             : [];
+        // Damaged stock adjustments made by van's driver on that day
+        const adjustments = driverIds.length > 0
+            ? await prisma_1.default.stockAdjustment.findMany({
+                where: { driverId: { in: driverIds }, reason: 'DAMAGE', createdAt: { gte: dayStart, lte: dayEnd } },
+                select: { productId: true, quantity: true }, // explicit select — avoids missing imageUrl column crash
+            })
+            : [];
         // Build sold-per-product map from cash sales
         const soldMap = new Map();
         for (const sale of cashSales) {
@@ -666,10 +678,16 @@ const getVanWarehouse = async (req, res) => {
         for (const item of loadedStock) {
             loadedMap.set(item.productId, (loadedMap.get(item.productId) ?? 0) + item.quantity);
         }
+        // Build damaged-per-product map
+        const damagedMap = new Map();
+        for (const adj of adjustments) {
+            damagedMap.set(adj.productId, (damagedMap.get(adj.productId) ?? 0) + Math.abs(adj.quantity));
+        }
         // Current van inventory (live remaining stock)
-        const currentInventory = van.inventory.map(inv => {
+        const currentInventory = (van.inventory ?? []).map(inv => {
             const loaded = loadedMap.get(inv.productId) ?? inv.quantity;
             const sold = soldMap.get(inv.productId);
+            const damaged = damagedMap.get(inv.productId) ?? 0;
             return {
                 productId: inv.productId,
                 name: inv.product.name,
@@ -680,12 +698,14 @@ const getVanWarehouse = async (req, res) => {
                 loadedQty: loaded,
                 remainingQty: inv.quantity,
                 soldQty: sold?.soldQty ?? (loaded - inv.quantity > 0 ? loaded - inv.quantity : 0),
+                damagedQty: damaged,
                 revenue: sold?.revenue ?? 0,
             };
         });
         const totalLoaded = currentInventory.reduce((s, i) => s + i.loadedQty, 0);
         const totalRemaining = currentInventory.reduce((s, i) => s + i.remainingQty, 0);
         const totalSold = currentInventory.reduce((s, i) => s + i.soldQty, 0);
+        const totalDamaged = currentInventory.reduce((s, i) => s + i.damagedQty, 0);
         const totalRevenue = currentInventory.reduce((s, i) => s + i.revenue, 0);
         const deliverySummary = deliveries.reduce((acc, d) => {
             acc[d.status] = (acc[d.status] ?? 0) + 1;
@@ -707,6 +727,7 @@ const getVanWarehouse = async (req, res) => {
                 summary: {
                     totalLoaded,
                     totalSold,
+                    totalDamaged,
                     totalRemaining,
                     totalRevenue,
                     deliveries: deliverySummary,

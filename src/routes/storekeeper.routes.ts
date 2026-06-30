@@ -9,6 +9,7 @@ import {
   searchDrivers,
   getDamagedStock,
   reportDamagedStock,
+  resolveDamagedStock,
   getReconciliation,
   submitReconciliation,
   getDriversList,
@@ -34,6 +35,7 @@ router.post('/drivers/search', searchDrivers);
 router.get('/drivers', getDriversList);
 router.get('/damaged-stock', getDamagedStock);
 router.post('/damaged-stock', reportDamagedStock);
+router.post('/damaged-stock/:id/resolve', resolveDamagedStock);
 router.get('/vans/:vanId/reconciliation', getReconciliation);
 router.post('/vans/:vanId/reconciliation', submitReconciliation);
 

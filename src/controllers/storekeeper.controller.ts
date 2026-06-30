@@ -470,7 +470,7 @@ export const getDamagedStock = async (req: AuthRequest, res: Response): Promise<
 
     const adjustments = await prisma.stockAdjustment.findMany({
       where: {
-        reason: 'DAMAGE',
+        reason: { in: ['DAMAGE', 'RETURN'] },
         createdAt: {
           gte: start,
           lt: end,
@@ -481,6 +481,8 @@ export const getDamagedStock = async (req: AuthRequest, res: Response): Promise<
         quantity: true,
         notes: true,
         createdAt: true,
+        status: true,
+        imageUrl: true,
         product: {
           select: {
             id: true,
@@ -489,15 +491,15 @@ export const getDamagedStock = async (req: AuthRequest, res: Response): Promise<
             imageUrl: true,
           },
         },
+        van: {
+          select: {
+            plateNumber: true,
+          }
+        },
         driver: {
           select: {
             id: true,
             name: true,
-            van: {
-              select: {
-                plateNumber: true,
-              },
-            },
           },
         },
       },
@@ -516,10 +518,11 @@ export const getDamagedStock = async (req: AuthRequest, res: Response): Promise<
       productImage: adj.product.imageUrl,
       proofImage: adj.imageUrl,
       quantity: Math.abs(adj.quantity),
-      vanNumber: adj.driver.van?.plateNumber || 'No Van',
+      vanNumber: adj.van?.plateNumber || adj.driver.van?.plateNumber || 'No Van',
       driverName: adj.driver.name,
       uploadedAt: adj.createdAt,
       reason: adj.notes || 'Damage reported',
+      status: adj.status,
     }));
 
     res.json({
@@ -546,7 +549,7 @@ export const reportDamagedStock = async (req: AuthRequest, res: Response): Promi
       return;
     }
 
-    const validReasons = ['DAMAGE', 'EXPIRY', 'THEFT', 'OTHER'];
+    const validReasons = ['DAMAGE', 'EXPIRY', 'OTHER'];
     if (!validReasons.includes(reason)) {
       res.status(400).json({ success: false, error: `Reason must be one of: ${validReasons.join(', ')}` });
       return;
@@ -593,9 +596,11 @@ export const reportDamagedStock = async (req: AuthRequest, res: Response): Promi
       await tx.stockAdjustment.create({
         data: {
           driverId,
+          vanId,
           productId,
           quantity: -quantity,
           reason: reason as any,
+          status: 'APPROVED',
           notes: notes || 'Damage reported by storekeeper',
           imageUrl: imageUrl || null,
         },
@@ -610,6 +615,75 @@ export const reportDamagedStock = async (req: AuthRequest, res: Response): Promi
   } catch (err) {
     console.error('Error reporting damaged stock for storekeeper:', err);
     res.status(500).json({ success: false, error: 'Failed to report damaged stock' });
+  }
+};
+
+// ─── POST /api/v1/storekeeper/damaged-stock/:id/resolve ────────────────────────
+export const resolveDamagedStock = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const { action, notes } = req.body; // 'APPROVE' or 'REJECT'
+
+    if (!['APPROVE', 'REJECT'].includes(action)) {
+      res.status(400).json({ success: false, error: 'Invalid action. Must be APPROVE or REJECT' });
+      return;
+    }
+
+    const adjustment = await prisma.stockAdjustment.findUnique({
+      where: { id },
+      include: {
+        van: true,
+      },
+    });
+
+    if (!adjustment) {
+      res.status(404).json({ success: false, error: 'Stock adjustment not found' });
+      return;
+    }
+
+    if (adjustment.status !== 'PENDING') {
+      res.status(400).json({ success: false, error: `Adjustment is already ${adjustment.status}` });
+      return;
+    }
+
+    await prisma.$transaction(async (tx) => {
+      if (action === 'REJECT') {
+        // Return stock to van
+        if (adjustment.vanId) {
+          await tx.vanInventory.upsert({
+            where: { vanId_productId: { vanId: adjustment.vanId, productId: adjustment.productId } },
+            update: { quantity: { increment: Math.abs(adjustment.quantity) } },
+            create: { vanId: adjustment.vanId, productId: adjustment.productId, quantity: Math.abs(adjustment.quantity) },
+          });
+        }
+        await tx.stockAdjustment.update({
+          where: { id },
+          data: { status: 'REJECTED', notes: notes || adjustment.notes },
+        });
+      } else if (action === 'APPROVE') {
+        await tx.stockAdjustment.update({
+          where: { id },
+          data: { status: 'APPROVED', notes: notes || adjustment.notes },
+        });
+      }
+    });
+
+    if (action === 'APPROVE' && adjustment.van) {
+      pushAdjustmentToOdooBackground(
+        adjustment.van, 
+        adjustment.productId, 
+        Math.abs(adjustment.quantity), 
+        adjustment.reason, 
+        notes || adjustment.notes || ''
+      ).catch((err) =>
+        console.error('⚠️ Background Odoo stock adjustment push failed:', err?.message)
+      );
+    }
+
+    res.json({ success: true, message: `Damaged stock ${action.toLowerCase()}d successfully` });
+  } catch (err) {
+    console.error('Error resolving damaged stock for storekeeper:', err);
+    res.status(500).json({ success: false, error: 'Failed to resolve damaged stock' });
   }
 };
 
@@ -857,6 +931,23 @@ async function pushAdjustmentToOdooBackground(
     console.log(`✅ Odoo: Stock adjustment for ${product.name} in van location ${vanLocationId} — ${currentQty} → ${newQty} (reason: ${reason})`);
   } else {
     console.warn(`⚠️ Odoo: No quant found for product ${product.odooId} in van location ${vanLocationId}`);
+  }
+
+  // If this is a return, we also need to add the stock back to the main warehouse
+  if (reason === 'RETURN') {
+    const warehouseLocationId = await odoo.getWarehouseStockLocationId();
+    const warehouseQuants: any[] = await odoo.searchRead(
+      'stock.quant',
+      [['product_id', '=', product.odooId], ['location_id', '=', warehouseLocationId]],
+      ['id', 'quantity'],
+      { limit: 1 }
+    );
+    
+    const warehouseCurrentQty = warehouseQuants.length > 0 ? (warehouseQuants[0].quantity ?? 0) : 0;
+    const warehouseNewQty = warehouseCurrentQty + qty;
+    
+    await odoo.createInventoryAdjustment(product.odooId, warehouseLocationId, warehouseNewQty, reason);
+    console.log(`✅ Odoo: Stock returned to warehouse ${warehouseLocationId} for ${product.name} — ${warehouseCurrentQty} → ${warehouseNewQty}`);
   }
 }
 
