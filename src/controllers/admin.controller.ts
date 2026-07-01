@@ -662,19 +662,31 @@ export const getVanWarehouse = async (req: Request, res: Response): Promise<void
     const deliveries = driverIds.length > 0
       ? await prisma.delivery.findMany({
           where: { driverId: { in: driverIds }, updatedAt: { gte: dayStart, lte: dayEnd } },
-          select: { id: true, status: true, customer: { select: { name: true } } },
+          select: { 
+            id: true, 
+            status: true, 
+            customer: { select: { name: true } },
+            items: {
+              select: {
+                quantity: true,
+                unitPrice: true,
+                productId: true,
+                product: { select: { id: true, name: true, sku: true, unit: true } }
+              }
+            }
+          },
         })
       : [];
 
-    // Damaged stock adjustments made by van's driver on that day
+    // All stock adjustments made by van's driver on that day (not just DAMAGE)
     const adjustments = driverIds.length > 0
       ? await prisma.stockAdjustment.findMany({
-          where: { driverId: { in: driverIds }, reason: 'DAMAGE', createdAt: { gte: dayStart, lte: dayEnd } },
+          where: { driverId: { in: driverIds }, createdAt: { gte: dayStart, lte: dayEnd } },
           select: { productId: true, quantity: true },   // explicit select — avoids missing imageUrl column crash
         })
       : [];
 
-    // Build sold-per-product map from cash sales
+    // Build sold-per-product map from cash sales and deliveries
     const soldMap = new Map<string, { productId: string; name: string; sku: string; unit: string; soldQty: number; revenue: number }>();
     for (const sale of cashSales) {
       for (const item of sale.items) {
@@ -682,6 +694,16 @@ export const getVanWarehouse = async (req: Request, res: Response): Promise<void
         existing.soldQty += item.quantity;
         existing.revenue += item.unitPrice * item.quantity;
         soldMap.set(item.productId, existing);
+      }
+    }
+    for (const d of deliveries) {
+      if (d.status === 'DELIVERED' && d.items) {
+        for (const item of d.items) {
+          const existing = soldMap.get(item.productId) ?? { productId: item.productId, name: item.product.name, sku: item.product.sku, unit: item.product.unit, soldQty: 0, revenue: 0 };
+          existing.soldQty += item.quantity;
+          existing.revenue += item.unitPrice * item.quantity;
+          soldMap.set(item.productId, existing);
+        }
       }
     }
 
@@ -711,7 +733,7 @@ export const getVanWarehouse = async (req: Request, res: Response): Promise<void
         priceRetail: inv.product.priceRetail,
         loadedQty: loaded,
         remainingQty: inv.quantity,
-        soldQty: sold?.soldQty ?? (loaded - inv.quantity > 0 ? loaded - inv.quantity : 0),
+        soldQty: sold?.soldQty ?? 0,
         damagedQty: damaged,
         revenue: sold?.revenue ?? 0,
       };
