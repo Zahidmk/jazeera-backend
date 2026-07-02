@@ -416,9 +416,27 @@ export const deleteVan = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
 
-    const van = await prisma.van.findUnique({ where: { id } });
+    const van = await prisma.van.findUnique({ 
+      where: { id },
+      include: {
+        inventory: { where: { quantity: { gt: 0 } } },
+        shifts: { where: { status: 'ACTIVE' } }
+      }
+    });
+
     if (!van) {
       res.status(404).json({ success: false, error: 'Van not found' });
+      return;
+    }
+
+    if (van.shifts.length > 0) {
+      res.status(400).json({ success: false, error: 'Cannot archive: This van is currently in an active shift.' });
+      return;
+    }
+
+    if (van.inventory.length > 0) {
+      const totalStock = van.inventory.reduce((sum, item) => sum + item.quantity, 0);
+      res.status(400).json({ success: false, error: `Cannot archive: This van still has ${totalStock} units of stock. Please return stock to the main warehouse first.` });
       return;
     }
 
