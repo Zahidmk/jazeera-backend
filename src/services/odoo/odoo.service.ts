@@ -204,7 +204,8 @@ export async function fetchStockQuants(limit = 500): Promise<any[]> {
 /** Create a sale order in Odoo (for cash sales) */
 export async function createSaleOrder(
   partnerId: number,
-  lines: { productId: number; qty: number; price: number; discount?: number }[]
+  lines: { productId: number; qty: number; price: number; discount?: number }[],
+  salesmanName?: string
 ): Promise<number> {
   const orderLines = lines.map((l) => [
     0, 0,
@@ -216,10 +217,16 @@ export async function createSaleOrder(
     },
   ]);
 
-  return create('sale.order', {
+  const payload: any = {
     partner_id: partnerId,
     order_line: orderLines,
-  });
+  };
+
+  if (salesmanName) {
+    payload.external_system_id = salesmanName;
+  }
+
+  return create('sale.order', payload);
 }
 
 /** Create a CRM lead in Odoo */

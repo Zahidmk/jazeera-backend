@@ -362,7 +362,13 @@ async function pushSaleToOdoo(
   }
 
   // 1. Create the sale order in Odoo
-  const odooSaleId = await odoo.createSaleOrder(partnerOdooId, validLines);
+  const saleRecord = await prisma.cashSale.findUnique({
+    where: { id: saleId },
+    include: { driver: true }
+  });
+  const salesmanName = saleRecord?.driver?.name || undefined;
+
+  const odooSaleId = await odoo.createSaleOrder(partnerOdooId, validLines, salesmanName);
   await prisma.cashSale.update({ where: { id: saleId }, data: { odooSaleId } });
   console.log(`✅ Odoo: Cash sale ${saleId} → SO created with odooSaleId: ${odooSaleId}`);
 

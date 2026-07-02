@@ -46,6 +46,7 @@ async function pushQuotationToOdoo(quotationId: string): Promise<void> {
       where: { id: quotationId },
       include: {
         customer: true,
+        salesman: true,
         items: {
           include: {
             product: { select: { odooId: true } },
@@ -134,7 +135,8 @@ async function pushQuotationToOdoo(quotationId: string): Promise<void> {
     }
 
     // Pushing to Odoo as a draft Sale Order (represents a Quotation in Odoo)
-    const odooQuotationId = await odoo.createSaleOrder(partnerOdooId, lines);
+    const salesmanName = quotation.salesman?.name || undefined;
+    const odooQuotationId = await odoo.createSaleOrder(partnerOdooId, lines, salesmanName);
 
     // Update local quotation with the Odoo Sale Order ID
     await prisma.quotation.update({
