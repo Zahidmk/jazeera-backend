@@ -451,8 +451,8 @@ export async function confirmSaleOrderWithVanLocation(
 ): Promise<void> {
   try {
     await execute('sale.order', 'action_confirm', [[odooSaleOrderId]]);
-  } catch {
-    // Already confirmed
+  } catch (err: any) {
+    console.error(`⚠️ Failed to confirm Sale Order ${odooSaleOrderId}:`, err?.message || err);
   }
 
   // Update the outgoing picking's source location to the van
@@ -492,8 +492,8 @@ export async function updateSaleOrderStatus(
     // Try to confirm if not already confirmed
     try {
       await execute('sale.order', 'action_confirm', [[odooOrderId]]);
-    } catch {
-      // Already confirmed — ignore
+    } catch (err: any) {
+      console.error(`⚠️ Failed to confirm Sale Order ${odooOrderId}:`, err?.message || err);
     }
     // Add internal note
     if (notes) {

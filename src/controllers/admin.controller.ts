@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../utils/prisma';
 import bcrypt from 'bcryptjs';
+import odoo from '../services/odoo/odoo.service';
 
 // ─── GET /api/v1/admin/stats ──────────────────────────────────────────────────
 export const getStats = async (_req: Request, res: Response): Promise<void> => {
@@ -414,8 +415,28 @@ export const updateVan = async (req: Request, res: Response): Promise<void> => {
 export const deleteVan = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    await prisma.van.update({ where: { id }, data: { isActive: false } });
-    res.json({ success: true, message: 'Van deactivated' });
+
+    const van = await prisma.van.findUnique({ where: { id } });
+    if (!van) {
+      res.status(404).json({ success: false, error: 'Van not found' });
+      return;
+    }
+
+    if (van.odooLocationId) {
+      try {
+        await odoo.write('stock.location', [van.odooLocationId], { active: false });
+        console.log(`✅ Odoo location ${van.odooLocationId} archived for van ${van.plateNumber}`);
+      } catch (err: any) {
+        console.error(`⚠️ Failed to archive Odoo location:`, err.message);
+      }
+    }
+
+    await prisma.van.update({ 
+      where: { id }, 
+      data: { isActive: false, odooLocationId: null } 
+    });
+    
+    res.json({ success: true, message: 'Van deactivated and Odoo location archived' });
   } catch (err: any) {
     if (err.code === 'P2025') {
       res.status(404).json({ success: false, error: 'Van not found' });

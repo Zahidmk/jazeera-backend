@@ -383,7 +383,11 @@ async function pushSaleToOdoo(
     await odoo.confirmSaleOrderWithVanLocation(odooSaleId, vanLocationId);
   } else {
     // Confirm without location override
-    try { await odoo.execute('sale.order', 'action_confirm', [[odooSaleId]]); } catch { /* already confirmed */ }
+    try { 
+      await odoo.execute('sale.order', 'action_confirm', [[odooSaleId]]); 
+    } catch (err: any) { 
+      console.error(`⚠️ Failed to confirm Sale Order ${odooSaleId}:`, err?.message || err);
+    }
   }
 
   // 4. Validate the outgoing delivery picking (deducts stock from Odoo)
