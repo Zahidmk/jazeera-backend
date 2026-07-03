@@ -245,6 +245,19 @@ export async function createLead(data: {
   });
 }
 
+/** Create an employee in Odoo */
+export async function createEmployee(data: {
+  name: string;
+  work_email: string;
+  work_phone?: string;
+}): Promise<number> {
+  return create('hr.employee', {
+    name: data.name,
+    work_email: data.work_email,
+    work_phone: data.work_phone || false,
+  });
+}
+
 // ─── Van as Odoo Stock Location ──────────────────────────────────────────────
 
 /**
@@ -623,6 +636,7 @@ export default {
   fetchOrdersModifiedSince,
   createSaleOrder,
   createLead,
+  createEmployee,
   updateSaleOrderStatus,
   createInventoryAdjustment,
   // Van warehouse integration

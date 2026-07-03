@@ -500,6 +500,16 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
       data: { name, email, phone: phone || null, passwordHash, role: role || 'DRIVER' },
       select: { id: true, name: true, email: true, phone: true, role: true, isActive: true, createdAt: true },
     });
+    
+    // Create employee in Odoo asynchronously
+    odoo.createEmployee({
+      name,
+      work_email: email,
+      work_phone: phone || undefined,
+    }).catch((err) => {
+      console.error(`⚠️ Failed to create employee in Odoo for user ${user.id}:`, err?.message);
+    });
+
     res.status(201).json({ success: true, data: user });
   } catch (err: any) {
     if (err.code === 'P2002') {
