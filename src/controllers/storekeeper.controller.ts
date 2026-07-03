@@ -254,7 +254,7 @@ export const getDashboard = async (req: AuthRequest, res: Response): Promise<voi
 
     const damagedAdjustments = await prisma.stockAdjustment.aggregate({
       where: {
-        reason: 'DAMAGE',
+        reason: { in: ['DAMAGE', 'EXPIRY', 'RETURN', 'OTHER'] },
         createdAt: {
           gte: start,
           lt: end,
@@ -470,7 +470,7 @@ export const getDamagedStock = async (req: AuthRequest, res: Response): Promise<
 
     const adjustments = await prisma.stockAdjustment.findMany({
       where: {
-        reason: { in: ['DAMAGE', 'RETURN'] },
+        reason: { in: ['DAMAGE', 'EXPIRY', 'RETURN', 'OTHER'] },
         createdAt: {
           gte: start,
           lt: end,
@@ -554,7 +554,7 @@ export const reportDamagedStock = async (req: AuthRequest, res: Response): Promi
       return;
     }
 
-    const validReasons = ['DAMAGE', 'EXPIRY', 'OTHER'];
+    const validReasons = ['DAMAGE', 'EXPIRY', 'RETURN', 'OTHER'];
     if (!validReasons.includes(reason)) {
       res.status(400).json({ success: false, error: `Reason must be one of: ${validReasons.join(', ')}` });
       return;
@@ -724,7 +724,7 @@ export const getReconciliation = async (req: AuthRequest, res: Response): Promis
     });
 
     const adjustments = await prisma.stockAdjustment.findMany({
-      where: { driverId, reason: 'DAMAGE', createdAt: { gte: shift.startedAt } },
+      where: { driverId, reason: { in: ['DAMAGE', 'EXPIRY', 'RETURN', 'OTHER'] }, createdAt: { gte: shift.startedAt } },
       select: { productId: true, quantity: true },
     });
 
@@ -875,11 +875,13 @@ export const submitReconciliation = async (req: AuthRequest, res: Response): Pro
       if (damagedQuantity > 0) {
         await tx.stockAdjustment.create({
           data: {
-            driverId,
+            driverId: shift.driverId,
+            vanId,
             productId,
             quantity: -damagedQuantity,
             reason: 'DAMAGE',
-            notes: 'Reconciled by storekeeper',
+            status: 'APPROVED',
+            notes: 'Reconciled by storekeeper (shortage treated as damage/loss)',
           },
         });
       }

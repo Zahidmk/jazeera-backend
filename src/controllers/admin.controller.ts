@@ -720,8 +720,8 @@ export const getVanWarehouse = async (req: Request, res: Response): Promise<void
     // All stock adjustments made by van's driver on that day (not just DAMAGE)
     const adjustments = driverIds.length > 0
       ? await prisma.stockAdjustment.findMany({
-          where: { driverId: { in: driverIds }, createdAt: { gte: dayStart, lte: dayEnd } },
-          select: { productId: true, quantity: true },   // explicit select — avoids missing imageUrl column crash
+          where: { driverId: { in: driverIds }, reason: { in: ['DAMAGE', 'EXPIRY', 'RETURN', 'OTHER'] }, createdAt: { gte: dayStart, lte: dayEnd } },
+          select: { productId: true, quantity: true },
         })
       : [];
 
