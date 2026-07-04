@@ -223,8 +223,8 @@ export async function createSaleOrder(
   };
 
   if (employeeId) {
-    // Passing the Odoo hr.employee ID to external_system_id as a string reference
-    payload.external_system_id = String(employeeId);
+    // Pass the Odoo hr.employee ID to the custom van_employee_id Many2one field
+    payload.van_employee_id = employeeId;
   }
 
   return create('sale.order', payload);
