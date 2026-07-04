@@ -70,9 +70,10 @@ model User {
   phone        String?  @unique
   passwordHash String
   role         Role     @default(DRIVER)
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  isActive       Boolean  @default(true)
+  odooEmployeeId Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   van         Van?              @relation("VanDriver")
   shifts      Shift[]

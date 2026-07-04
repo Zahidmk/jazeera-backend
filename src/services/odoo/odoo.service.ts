@@ -205,7 +205,7 @@ export async function fetchStockQuants(limit = 500): Promise<any[]> {
 export async function createSaleOrder(
   partnerId: number,
   lines: { productId: number; qty: number; price: number; discount?: number }[],
-  salesmanName?: string
+  employeeId?: number | null
 ): Promise<number> {
   const orderLines = lines.map((l) => [
     0, 0,
@@ -222,8 +222,9 @@ export async function createSaleOrder(
     order_line: orderLines,
   };
 
-  if (salesmanName) {
-    payload.external_system_id = salesmanName;
+  if (employeeId) {
+    // Passing the Odoo hr.employee ID to external_system_id as a string reference
+    payload.external_system_id = String(employeeId);
   }
 
   return create('sale.order', payload);

@@ -496,18 +496,23 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
       return;
     }
     const passwordHash = await bcrypt.hash(password, 10);
-    const user = await prisma.user.create({
-      data: { name, email, phone: phone || null, passwordHash, role: role || 'DRIVER' },
-      select: { id: true, name: true, email: true, phone: true, role: true, isActive: true, createdAt: true },
-    });
     
-    // Create employee in Odoo asynchronously
-    odoo.createEmployee({
-      name,
-      work_email: email,
-      work_phone: phone || undefined,
-    }).catch((err) => {
-      console.error(`⚠️ Failed to create employee in Odoo for user ${user.id}:`, err?.message);
+    // Create employee in Odoo synchronously so we get the ID
+    let odooEmployeeId = null;
+    try {
+      odooEmployeeId = await odoo.createEmployee({
+        name,
+        work_email: email,
+        work_phone: phone || undefined,
+      });
+    } catch (err: any) {
+      console.error(`⚠️ Failed to create employee in Odoo for new user:`, err?.message);
+      // We can decide to block creation, but for now we'll log and continue
+    }
+
+    const user = await prisma.user.create({
+      data: { name, email, phone: phone || null, passwordHash, role: role || 'DRIVER', odooEmployeeId },
+      select: { id: true, name: true, email: true, phone: true, role: true, isActive: true, createdAt: true, odooEmployeeId: true },
     });
 
     res.status(201).json({ success: true, data: user });

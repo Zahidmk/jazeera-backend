@@ -366,9 +366,9 @@ async function pushSaleToOdoo(
     where: { id: saleId },
     include: { driver: true }
   });
-  const salesmanName = saleRecord?.driver?.name || undefined;
+  const employeeId = saleRecord?.driver?.odooEmployeeId || null;
 
-  const odooSaleId = await odoo.createSaleOrder(partnerOdooId, validLines, salesmanName);
+  const odooSaleId = await odoo.createSaleOrder(partnerOdooId, validLines, employeeId);
   await prisma.cashSale.update({ where: { id: saleId }, data: { odooSaleId } });
   console.log(`✅ Odoo: Cash sale ${saleId} → SO created with odooSaleId: ${odooSaleId}`);
 
