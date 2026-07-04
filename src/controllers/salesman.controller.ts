@@ -20,6 +20,11 @@ async function ensureCustomerExists(customerId: string): Promise<boolean> {
           name: leadExists.name,
           phone: leadExists.phone,
           address: leadExists.address,
+          street: leadExists.street,
+          district: leadExists.district,
+          city: leadExists.city,
+          zip: leadExists.zip,
+          buildingNumber: leadExists.buildingNumber,
           lat: leadExists.lat,
           lng: leadExists.lng,
         },
@@ -93,7 +98,10 @@ async function pushQuotationToOdoo(quotationId: string): Promise<void> {
         partnerOdooId = await odoo.create('res.partner', {
           name: customerName,
           phone: customerPhone || false,
-          street: quotation.customer.address || false,
+          street: quotation.customer.street || quotation.customer.address || false,
+          street2: quotation.customer.district || false,
+          city: quotation.customer.city || false,
+          zip: quotation.customer.zip || false,
           email: quotation.customer.email || false,
           customer_rank: 1, // Marks them as a customer in Odoo
         });

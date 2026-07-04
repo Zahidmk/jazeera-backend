@@ -645,7 +645,7 @@ export const searchCustomers = async (req: AuthRequest, res: Response): Promise<
 export const addLead = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const driverId = req.user!.userId;
-    const { name, address, notes, latitude, longitude } = req.body;
+    const { name, address, notes, latitude, longitude, street, district, city, zip, buildingNumber } = req.body;
 
     // Accept phone as string OR number (Flutter may send it as a number)
     const phone = req.body.phone != null ? String(req.body.phone) : undefined;
@@ -668,6 +668,11 @@ export const addLead = async (req: AuthRequest, res: Response): Promise<void> =>
             name,
             phone: phone || null,
             address: address || null,
+            street: street || null,
+            district: district || null,
+            city: city || null,
+            zip: zip || null,
+            buildingNumber: buildingNumber || null,
             lat: latVal,
             lng: lngVal,
           },
@@ -681,6 +686,11 @@ export const addLead = async (req: AuthRequest, res: Response): Promise<void> =>
             name,
             phone: phone || null,
             address: address || null,
+            street: street || null,
+            district: district || null,
+            city: city || null,
+            zip: zip || null,
+            buildingNumber: buildingNumber || null,
             notes: notes || null,
             lat: latVal,
             lng: lngVal,
@@ -691,7 +701,15 @@ export const addLead = async (req: AuthRequest, res: Response): Promise<void> =>
       console.log('✅ Lead and Customer created:', lead);
 
       // ── Push to Odoo CRM (fire-and-forget — DB save must not fail if Odoo is down)
-      pushLeadToOdoo(lead.id, { name, phone, street: address, description: notes }).catch((err) =>
+      pushLeadToOdoo(lead.id, { 
+        name, 
+        phone, 
+        street: street || address, 
+        district, 
+        city, 
+        zip, 
+        description: notes 
+      }).catch((err) =>
         console.error('⚠️  Odoo lead push failed (non-blocking):', err?.message)
       );
 
@@ -712,7 +730,15 @@ export const addLead = async (req: AuthRequest, res: Response): Promise<void> =>
 // ─── Helper: push lead to Odoo CRM & save odooLeadId ─────────────────────────
 async function pushLeadToOdoo(
   leadId: string,
-  data: { name: string; phone?: string; street?: string; description?: string }
+  data: { 
+    name: string; 
+    phone?: string; 
+    street?: string; 
+    district?: string;
+    city?: string;
+    zip?: string;
+    description?: string;
+  }
 ): Promise<void> {
   const odooLeadId = await odoo.createLead(data);
 

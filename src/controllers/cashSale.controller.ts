@@ -205,7 +205,17 @@ export const submitSale = async (req: AuthRequest, res: Response): Promise<void>
     // If no valid customerId, create a walk-in customer
     if (!resolvedCustomerId) {
       const walkIn = await prisma.customer.create({
-        data: { name: customerName || 'Walk-in Customer', phone: customerPhone || null },
+        data: { 
+          name: customerName || 'Walk-in Customer', 
+          phone: customerPhone || null,
+          street: req.body.street || null,
+          district: req.body.district || null,
+          city: req.body.city || null,
+          zip: req.body.zip || null,
+          buildingNumber: req.body.buildingNumber || null,
+          lat: latitude != null ? parseFloat(String(latitude)) : null,
+          lng: longitude != null ? parseFloat(String(longitude)) : null,
+        },
       });
       resolvedCustomerId = walkIn.id;
     }
@@ -321,7 +331,10 @@ async function pushSaleToOdoo(
         partnerOdooId = await odoo.create('res.partner', {
           name: customerName,
           phone: customerPhone || false,
-          street: customer.address || false,
+          street: customer.street || customer.address || false,
+          street2: customer.district || false,
+          city: customer.city || false,
+          zip: customer.zip || false,
           email: customer.email || false,
           customer_rank: 1, // Marks them as a customer in Odoo
         });

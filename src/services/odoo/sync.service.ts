@@ -72,6 +72,11 @@ export async function syncCustomers(): Promise<{ created: number; updated: numbe
       phone,
       email: oc.email || null,
       address: address || null,
+      street: oc.street || null,
+      district: oc.street2 || null,
+      city: oc.city || null,
+      zip: oc.zip || null,
+      buildingNumber: null, // Odoo doesn't have a standard field for this unless localization is used
       lat: oc.partner_latitude || null,
       lng: oc.partner_longitude || null,
     };

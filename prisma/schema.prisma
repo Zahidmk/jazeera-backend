@@ -156,12 +156,17 @@ model Customer {
   odooId    Int?     @unique
   name      String
   phone     String?
-  email     String?
-  address   String?
-  lat       Float?
-  lng       Float?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  email          String?
+  address        String?
+  street         String?
+  district       String?
+  city           String?
+  zip            String?
+  buildingNumber String?
+  lat            Float?
+  lng            Float?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   deliveries Delivery[]
   cashSales  CashSale[]
@@ -269,6 +274,11 @@ model Lead {
   name       String
   phone      String?
   address    String?
+  street         String?
+  district       String?
+  city           String?
+  zip            String?
+  buildingNumber String?
   notes      String?
   lat        Float?
   lng        Float?

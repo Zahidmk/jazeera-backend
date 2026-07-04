@@ -162,8 +162,8 @@ export async function fetchCustomers(limit = 500): Promise<any[]> {
     [['customer_rank', '>', 0]],
     [
       'id', 'name', 'phone', 'mobile', 'email',
-      'street', 'street2', 'city', 'partner_latitude',
-      'partner_longitude',
+      'street', 'street2', 'city', 'state_id', 'zip',
+      'partner_latitude', 'partner_longitude',
     ],
     { limit }
   );
@@ -235,12 +235,18 @@ export async function createLead(data: {
   name: string;
   phone?: string;
   street?: string;
+  district?: string;
+  city?: string;
+  zip?: string;
   description?: string;
 }): Promise<number> {
   return create('crm.lead', {
     name: data.name,
     phone: data.phone || false,
     street: data.street || false,
+    street2: data.district || false,
+    city: data.city || false,
+    zip: data.zip || false,
     description: data.description || false,
     type: 'lead',
   });
