@@ -8,7 +8,7 @@ dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 const ODOO_URL = process.env.ODOO_URL || '';
 const ODOO_DB = process.env.ODOO_DB || '';
 const ODOO_USERNAME = process.env.ODOO_USERNAME || '';
-const ODOO_API_KEY = process.env.ODOO_API_KEY || '';
+const ODOO_PASSWORD = process.env.ODOO_PASSWORD || '';
 
 // Parse URL for xmlrpc client
 const url = new URL(ODOO_URL);
@@ -47,7 +47,7 @@ export async function authenticate(): Promise<number> {
   const uid = await rpcCall(commonClient, 'authenticate', [
     ODOO_DB,
     ODOO_USERNAME,
-    ODOO_API_KEY,
+    ODOO_PASSWORD,
     {},
   ]);
 
@@ -71,7 +71,7 @@ async function execute(
   return rpcCall(objectClient, 'execute_kw', [
     ODOO_DB,
     uid,
-    ODOO_API_KEY,
+    ODOO_PASSWORD,
     model,
     method,
     args,
