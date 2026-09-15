@@ -6,11 +6,13 @@ import prisma from '../utils/prisma';
 import { AuthRequest } from '../types';
 import odoo from '../services/odoo/odoo.service';
 
-// Our stored prices (unitPrice/totalAmount) are VAT-inclusive (Saudi 15% VAT).
-// Odoo's product taxes are configured tax-exclusive, so we must send the
-// pre-tax price per line — otherwise Odoo adds 15% on top of what was
-// actually charged (e.g. a SAR 2.00 sale would show as SAR 2.30 in Odoo).
-const VAT_RATE = 0.15;
+// Our stored unitPrice/totalAmount is the pre-tax (subtotal) amount — same as
+// the "Subtotal" the driver app shows before adding VAT. The app itself adds
+// 15% VAT on top to reach the Grand Total actually charged (e.g. subtotal
+// SAR 2.00 + VAT SAR 0.30 = Grand Total SAR 2.30). Odoo's tax is configured
+// the same way (tax-exclusive), so we send unitPrice to Odoo as-is and let
+// Odoo compute the same 15% on top — its amount_tax/amount_total are the
+// real, authoritative VAT figures we read back and store below.
 
 // ─── Multer config for receipt upload ────────────────────────────────────────
 const storage = multer.diskStorage({
@@ -368,7 +370,7 @@ async function pushSaleToOdoo(
       return {
         productId: product?.odooId ?? 0,
         qty: item.quantity,
-        price: item.unitPrice / (1 + VAT_RATE),
+        price: item.unitPrice,
         discount: item.discount || 0,
       };
     })
@@ -400,9 +402,11 @@ async function pushSaleToOdoo(
         where: { id: saleId },
         data: { subtotalAmount: soAmounts.amount_untaxed, vatAmount: soAmounts.amount_tax },
       });
-      if (Math.abs(soAmounts.amount_total - saleRecord!.totalAmount) > 0.01) {
+      // amount_untaxed should equal our totalAmount (both are the pre-tax
+      // subtotal) — amount_total will legitimately differ, since it includes VAT.
+      if (Math.abs(soAmounts.amount_untaxed - saleRecord!.totalAmount) > 0.01) {
         console.warn(
-          `⚠️  Odoo SO ${odooSaleId} amount_total (${soAmounts.amount_total}) does not match CashSale ${saleId} totalAmount (${saleRecord!.totalAmount})`
+          `⚠️  Odoo SO ${odooSaleId} amount_untaxed (${soAmounts.amount_untaxed}) does not match CashSale ${saleId} totalAmount (${saleRecord!.totalAmount})`
         );
       }
     }
