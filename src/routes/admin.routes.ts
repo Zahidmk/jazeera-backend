@@ -26,7 +26,7 @@ import {
   approveLead,
   rejectLead,
 } from '../controllers/admin.controller';
-import { exportReport } from '../controllers/reports.controller';
+import { exportReport, getReportsSummary } from '../controllers/reports.controller';
 import { exportRules, validate } from '../middleware/validators';
 
 const router = Router();
@@ -51,6 +51,9 @@ router.get('/products', getProducts);
 
 // GET /api/v1/admin/reports/daily?date=YYYY-MM-DD
 router.get('/reports/daily', getDailyReport);
+
+// GET /api/v1/admin/reports/summary
+router.get('/reports/summary', getReportsSummary);
 
 // GET /api/v1/admin/reports/export?type=csv|pdf&report=daily|deliveries|sales&date=YYYY-MM-DD
 router.get('/reports/export', exportRules, validate, exportReport);

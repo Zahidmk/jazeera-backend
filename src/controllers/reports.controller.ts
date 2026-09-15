@@ -7,6 +7,110 @@ import { Request, Response } from 'express';
 import { Parser } from 'json2csv';
 import prisma from '../utils/prisma';
 
+// ─── Reports Summary (for the Reports & Analytics dashboard page) ─────────────
+// GET /api/v1/admin/reports/summary
+export const getReportsSummary = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    const [
+      totalCashSales,
+      saleTypeCounts,
+      recentSales,
+      revenueByDriver,
+      routes,
+      routeDeliveries,
+    ] = await Promise.all([
+      prisma.cashSale.count(),
+      prisma.cashSale.groupBy({ by: ['saleType'], _count: { saleType: true } }),
+      prisma.cashSale.findMany({
+        where: { createdAt: { gte: sevenDaysAgo } },
+        select: { totalAmount: true, createdAt: true },
+      }),
+      prisma.cashSale.groupBy({
+        by: ['driverId'],
+        _sum: { totalAmount: true },
+        orderBy: { _sum: { totalAmount: 'desc' } },
+        take: 5,
+      }),
+      prisma.route.findMany({ where: { isActive: true }, select: { id: true, name: true } }),
+      prisma.delivery.findMany({
+        where: { routeId: { not: null } },
+        select: {
+          routeId: true,
+          status: true,
+          items: { select: { quantity: true, unitPrice: true } },
+        },
+      }),
+    ]);
+
+    // Sale type distribution (CASH vs CREDIT)
+    const saleTypeDistribution = saleTypeCounts.map((s) => ({
+      name: s.saleType.charAt(0) + s.saleType.slice(1).toLowerCase(),
+      value: s._count.saleType,
+    }));
+
+    // Last 7 days sales trend
+    const trendDays: { date: string; sales: number }[] = [];
+    for (let i = 0; i < 7; i++) {
+      const day = new Date(sevenDaysAgo);
+      day.setDate(day.getDate() + i);
+      const nextDay = new Date(day);
+      nextDay.setDate(nextDay.getDate() + 1);
+      const daySales = recentSales
+        .filter((s) => s.createdAt >= day && s.createdAt < nextDay)
+        .reduce((sum, s) => sum + s.totalAmount, 0);
+      trendDays.push({
+        date: day.toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
+        sales: parseFloat(daySales.toFixed(2)),
+      });
+    }
+
+    // Top drivers by revenue
+    const driverIds = revenueByDriver.map((r) => r.driverId);
+    const drivers = await prisma.user.findMany({ where: { id: { in: driverIds } }, select: { id: true, name: true } });
+    const topDrivers = revenueByDriver.map((r) => ({
+      name: drivers.find((d) => d.id === r.driverId)?.name ?? 'Unknown',
+      revenue: parseFloat((r._sum.totalAmount ?? 0).toFixed(2)),
+    }));
+
+    // Sales + delivery success rate by route (from delivered items)
+    const routeStats = routes.map((route) => {
+      const deliveriesForRoute = routeDeliveries.filter((d) => d.routeId === route.id);
+      const deliveredForRoute = deliveriesForRoute.filter((d) => d.status === 'DELIVERED');
+      const revenue = deliveredForRoute.reduce(
+        (sum, d) => sum + d.items.reduce((iSum, i) => iSum + i.quantity * i.unitPrice, 0),
+        0
+      );
+      const successRate = deliveriesForRoute.length > 0
+        ? parseFloat(((deliveredForRoute.length / deliveriesForRoute.length) * 100).toFixed(1))
+        : 0;
+      return {
+        name: route.name,
+        revenue: parseFloat(revenue.toFixed(2)),
+        totalDeliveries: deliveriesForRoute.length,
+        successRate,
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        totalCashSales,
+        saleTypeDistribution,
+        salesTrend: trendDays,
+        topDrivers,
+        routeStats,
+      },
+    });
+  } catch (err: any) {
+    console.error('Failed to get reports summary:', err);
+    res.status(500).json({ success: false, error: `Failed to get reports summary: ${err.message}` });
+  }
+};
+
 // ─── Export Report ─────────────────────────────────────────────────────────────
 export const exportReport = async (req: Request, res: Response): Promise<void> => {
   try {
