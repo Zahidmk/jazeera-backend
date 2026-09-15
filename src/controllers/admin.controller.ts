@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import prisma from '../utils/prisma';
 import bcrypt from 'bcryptjs';
 import odoo from '../services/odoo/odoo.service';
+import { sumGrandTotal } from '../utils/vat';
 
 // ─── GET /api/v1/admin/stats ──────────────────────────────────────────────────
 export const getStats = async (_req: Request, res: Response): Promise<void> => {
@@ -17,9 +18,7 @@ export const getStats = async (_req: Request, res: Response): Promise<void> => {
       deliveredCount,
       failedCount,
       pendingDeliveries,
-      totalSalesRevenue,
-      todaySalesRevenue,
-      weekSalesRevenue,
+      allCashSales,
       totalProducts,
       lowStockCount,
       activeVans,
@@ -27,7 +26,6 @@ export const getStats = async (_req: Request, res: Response): Promise<void> => {
       leadsToday,
       leadsPendingApproval,
       usersByRole,
-      revenueByDriver,
       vansWithDriver,
     ] = await Promise.all([
       prisma.user.count({ where: { role: 'DRIVER', isActive: true } }),
@@ -35,9 +33,10 @@ export const getStats = async (_req: Request, res: Response): Promise<void> => {
       prisma.delivery.count({ where: { status: 'DELIVERED' } }),
       prisma.delivery.count({ where: { status: 'FAILED' } }),
       prisma.delivery.count({ where: { status: { in: ['PENDING', 'IN_PROGRESS'] } } }),
-      prisma.cashSale.aggregate({ _sum: { totalAmount: true } }),
-      prisma.cashSale.aggregate({ _sum: { totalAmount: true }, where: { createdAt: { gte: startOfToday } } }),
-      prisma.cashSale.aggregate({ _sum: { totalAmount: true }, where: { createdAt: { gte: startOfWeek } } }),
+      // Revenue figures use Grand Total (incl. VAT) — computed in JS below
+      // since VAT varies per sale (some products are 0%/exempt in Odoo),
+      // not a flat rate we can apply inside a SQL aggregate.
+      prisma.cashSale.findMany({ select: { totalAmount: true, vatAmount: true, driverId: true, createdAt: true } }),
       prisma.product.count({ where: { isActive: true } }),
       prisma.vanInventory.count({ where: { quantity: { lt: 5 } } }),
       prisma.van.count({ where: { isActive: true } }),
@@ -45,14 +44,17 @@ export const getStats = async (_req: Request, res: Response): Promise<void> => {
       prisma.lead.count({ where: { createdAt: { gte: startOfToday } } }),
       prisma.lead.count({ where: { status: 'PENDING' } }),
       prisma.user.groupBy({ by: ['role'], _count: { role: true } }),
-      prisma.cashSale.groupBy({ by: ['driverId'], _sum: { totalAmount: true } }),
       prisma.van.findMany({ where: { driverId: { not: null } }, select: { id: true, plateNumber: true, driverId: true } }),
     ]);
 
+    const totalSalesRevenue = sumGrandTotal(allCashSales);
+    const todaySalesRevenue = sumGrandTotal(allCashSales.filter((s) => s.createdAt >= startOfToday));
+    const weekSalesRevenue = sumGrandTotal(allCashSales.filter((s) => s.createdAt >= startOfWeek));
+
     const revenueByVan = vansWithDriver
       .map((van) => {
-        const rev = revenueByDriver.find((r) => r.driverId === van.driverId);
-        return { vanId: van.id, plateNumber: van.plateNumber, revenue: parseFloat((rev?._sum.totalAmount ?? 0).toFixed(2)) };
+        const driverSales = allCashSales.filter((s) => s.driverId === van.driverId);
+        return { vanId: van.id, plateNumber: van.plateNumber, revenue: parseFloat(sumGrandTotal(driverSales).toFixed(2)) };
       })
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 5);
@@ -74,9 +76,9 @@ export const getStats = async (_req: Request, res: Response): Promise<void> => {
               : 0,
         },
         sales: {
-          totalRevenue: parseFloat((totalSalesRevenue._sum.totalAmount ?? 0).toFixed(2)),
-          todayRevenue: parseFloat((todaySalesRevenue._sum.totalAmount ?? 0).toFixed(2)),
-          weekRevenue: parseFloat((weekSalesRevenue._sum.totalAmount ?? 0).toFixed(2)),
+          totalRevenue: parseFloat(totalSalesRevenue.toFixed(2)),
+          todayRevenue: parseFloat(todaySalesRevenue.toFixed(2)),
+          weekRevenue: parseFloat(weekSalesRevenue.toFixed(2)),
         },
         stock: {
           totalProducts,
@@ -156,7 +158,7 @@ export const getSales = async (req: Request, res: Response): Promise<void> => {
     const pageNum = parseInt(page as string);
     const limitNum = parseInt(limit as string);
 
-    const [sales, total, aggregate] = await Promise.all([
+    const [sales, total, revenueRows] = await Promise.all([
       prisma.cashSale.findMany({
         where,
         include: {
@@ -169,7 +171,7 @@ export const getSales = async (req: Request, res: Response): Promise<void> => {
         take: limitNum,
       }),
       prisma.cashSale.count({ where }),
-      prisma.cashSale.aggregate({ where, _sum: { totalAmount: true } }),
+      prisma.cashSale.findMany({ where, select: { totalAmount: true, vatAmount: true } }),
     ]);
 
     res.json({
@@ -180,7 +182,7 @@ export const getSales = async (req: Request, res: Response): Promise<void> => {
         page: pageNum,
         limit: limitNum,
         totalPages: Math.ceil(total / limitNum),
-        totalRevenue: parseFloat((aggregate._sum.totalAmount ?? 0).toFixed(2)),
+        totalRevenue: parseFloat(sumGrandTotal(revenueRows).toFixed(2)),
       },
     });
   } catch (err) {

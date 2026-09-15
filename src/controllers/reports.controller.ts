@@ -6,6 +6,7 @@
 import { Request, Response } from 'express';
 import { Parser } from 'json2csv';
 import prisma from '../utils/prisma';
+import { grandTotal, sumGrandTotal } from '../utils/vat';
 
 // ─── Reports Summary (for the Reports & Analytics dashboard page) ─────────────
 // GET /api/v1/admin/reports/summary
@@ -19,7 +20,7 @@ export const getReportsSummary = async (_req: Request, res: Response): Promise<v
       totalCashSales,
       saleTypeCounts,
       recentSales,
-      revenueByDriver,
+      allCashSales,
       routes,
       routeDeliveries,
     ] = await Promise.all([
@@ -27,14 +28,11 @@ export const getReportsSummary = async (_req: Request, res: Response): Promise<v
       prisma.cashSale.groupBy({ by: ['saleType'], _count: { saleType: true } }),
       prisma.cashSale.findMany({
         where: { createdAt: { gte: sevenDaysAgo } },
-        select: { totalAmount: true, createdAt: true },
+        select: { totalAmount: true, vatAmount: true, createdAt: true },
       }),
-      prisma.cashSale.groupBy({
-        by: ['driverId'],
-        _sum: { totalAmount: true },
-        orderBy: { _sum: { totalAmount: 'desc' } },
-        take: 5,
-      }),
+      // Revenue figures use Grand Total (incl. VAT) — computed in JS since
+      // VAT varies per sale (some products are 0%/exempt in Odoo).
+      prisma.cashSale.findMany({ select: { totalAmount: true, vatAmount: true, driverId: true } }),
       prisma.route.findMany({ where: { isActive: true }, select: { id: true, name: true } }),
       prisma.delivery.findMany({
         where: { routeId: { not: null } },
@@ -59,21 +57,23 @@ export const getReportsSummary = async (_req: Request, res: Response): Promise<v
       day.setDate(day.getDate() + i);
       const nextDay = new Date(day);
       nextDay.setDate(nextDay.getDate() + 1);
-      const daySales = recentSales
-        .filter((s) => s.createdAt >= day && s.createdAt < nextDay)
-        .reduce((sum, s) => sum + s.totalAmount, 0);
+      const daySales = sumGrandTotal(recentSales.filter((s) => s.createdAt >= day && s.createdAt < nextDay));
       trendDays.push({
         date: day.toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
         sales: parseFloat(daySales.toFixed(2)),
       });
     }
 
-    // Top drivers by revenue
-    const driverIds = revenueByDriver.map((r) => r.driverId);
-    const drivers = await prisma.user.findMany({ where: { id: { in: driverIds } }, select: { id: true, name: true } });
-    const topDrivers = revenueByDriver.map((r) => ({
-      name: drivers.find((d) => d.id === r.driverId)?.name ?? 'Unknown',
-      revenue: parseFloat((r._sum.totalAmount ?? 0).toFixed(2)),
+    // Top 5 drivers by revenue
+    const revenueByDriverId = new Map<string, number>();
+    for (const sale of allCashSales) {
+      revenueByDriverId.set(sale.driverId, (revenueByDriverId.get(sale.driverId) ?? 0) + grandTotal(sale));
+    }
+    const topDriverIds = [...revenueByDriverId.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const drivers = await prisma.user.findMany({ where: { id: { in: topDriverIds.map(([id]) => id) } }, select: { id: true, name: true } });
+    const topDrivers = topDriverIds.map(([driverId, revenue]) => ({
+      name: drivers.find((d) => d.id === driverId)?.name ?? 'Unknown',
+      revenue: parseFloat(revenue.toFixed(2)),
     }));
 
     // Sales + delivery success rate by route (from delivered items)
