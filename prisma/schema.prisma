@@ -239,16 +239,18 @@ model DeliveryItem {
 }
 
 model CashSale {
-  id          String   @id @default(uuid())
-  driverId    String
-  customerId  String?
-  saleType    SaleType @default(CASH)
-  totalAmount Float
-  receiptUrl  String?
-  odooSaleId  Int?
-  latitude    Float?
-  longitude   Float?
-  createdAt   DateTime @default(now())
+  id              String   @id @default(uuid())
+  driverId        String
+  customerId      String?
+  saleType        SaleType @default(CASH)
+  totalAmount     Float
+  subtotalAmount  Float?   // Amount before VAT, as computed by Odoo (amount_untaxed)
+  vatAmount       Float?   // VAT amount, as computed by Odoo (amount_tax)
+  receiptUrl      String?
+  odooSaleId      Int?
+  latitude        Float?
+  longitude       Float?
+  createdAt       DateTime @default(now())
 
   driver   User          @relation(fields: [driverId], references: [id])
   customer Customer?     @relation(fields: [customerId], references: [id])

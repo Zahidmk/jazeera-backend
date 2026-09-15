@@ -6,6 +6,12 @@ import prisma from '../utils/prisma';
 import { AuthRequest } from '../types';
 import odoo from '../services/odoo/odoo.service';
 
+// Our stored prices (unitPrice/totalAmount) are VAT-inclusive (Saudi 15% VAT).
+// Odoo's product taxes are configured tax-exclusive, so we must send the
+// pre-tax price per line — otherwise Odoo adds 15% on top of what was
+// actually charged (e.g. a SAR 2.00 sale would show as SAR 2.30 in Odoo).
+const VAT_RATE = 0.15;
+
 // ─── Multer config for receipt upload ────────────────────────────────────────
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, path.join(__dirname, '../../uploads/receipts')),
@@ -362,7 +368,7 @@ async function pushSaleToOdoo(
       return {
         productId: product?.odooId ?? 0,
         qty: item.quantity,
-        price: item.unitPrice,
+        price: item.unitPrice / (1 + VAT_RATE),
         discount: item.discount || 0,
       };
     })
@@ -384,6 +390,25 @@ async function pushSaleToOdoo(
   const odooSaleId = await odoo.createSaleOrder(partnerOdooId, validLines, employeeId);
   await prisma.cashSale.update({ where: { id: saleId }, data: { odooSaleId } });
   console.log(`✅ Odoo: Cash sale ${saleId} → SO created with odooSaleId: ${odooSaleId}`);
+
+  // Capture the real tax split Odoo computed, so the dashboard shows Odoo's
+  // actual figures instead of a guessed split.
+  try {
+    const [soAmounts] = await odoo.read('sale.order', [odooSaleId], ['amount_untaxed', 'amount_tax', 'amount_total']);
+    if (soAmounts) {
+      await prisma.cashSale.update({
+        where: { id: saleId },
+        data: { subtotalAmount: soAmounts.amount_untaxed, vatAmount: soAmounts.amount_tax },
+      });
+      if (Math.abs(soAmounts.amount_total - saleRecord!.totalAmount) > 0.01) {
+        console.warn(
+          `⚠️  Odoo SO ${odooSaleId} amount_total (${soAmounts.amount_total}) does not match CashSale ${saleId} totalAmount (${saleRecord!.totalAmount})`
+        );
+      }
+    }
+  } catch (err: any) {
+    console.error(`⚠️  Failed to read back tax amounts for SO ${odooSaleId}:`, err?.message);
+  }
 
   // 2. Get the van's Odoo stock location (find/create if needed)
   const van = await prisma.van.findUnique({
