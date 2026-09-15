@@ -7,6 +7,7 @@ import {
   syncOrders,
   syncAll,
   queueStatus,
+  syncLogs,
 } from '../controllers/sync.controller';
 import { handleWebhook } from '../controllers/webhook.controller';
 
@@ -17,6 +18,9 @@ router.get('/test', testConnection);
 
 // Queue status — live Redis job counts (no auth for dashboard visibility)
 router.get('/queue-status', queueStatus);
+
+// Sync history (no auth for dashboard visibility, matches queue-status)
+router.get('/logs', syncLogs);
 
 // Sync endpoints (no auth for easy dashboard integration)
 router.post('/products', syncProducts);

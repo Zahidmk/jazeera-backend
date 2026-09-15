@@ -32,15 +32,14 @@ import prisma from '../utils/prisma';
  *  Falls back to `fallbackMinutes` ago if no record exists. */
 async function getLastSyncAt(type: string, fallbackMinutes = 10): Promise<Date> {
   try {
-    // We store sync metadata in a simple key-value style using SyncLog model
-    const log = await (prisma as any).syncLog?.findFirst({
+    const log = await prisma.syncLog.findFirst({
       where: { syncType: type },
       orderBy: { createdAt: 'desc' },
       select: { createdAt: true },
     });
     if (log?.createdAt) return log.createdAt;
-  } catch {
-    // SyncLog table may not exist in schema — fall through
+  } catch (err: any) {
+    console.error(`⚠️  [cron] Failed to read last sync time for ${type}:`, err.message);
   }
 
   // Fallback: X minutes ago
@@ -52,16 +51,17 @@ async function getLastSyncAt(type: string, fallbackMinutes = 10): Promise<Date> 
 /** Record that a cron sync ran successfully */
 async function recordSyncRun(type: string, count: number) {
   try {
-    await (prisma as any).syncLog?.create({
+    await prisma.syncLog.create({
       data: {
         syncType: type,
+        source: 'cron',
         status: 'success',
         recordsProcessed: count,
         message: `Cron poll: ${count} records enqueued`,
       },
     });
-  } catch {
-    // Non-critical — table may not exist yet
+  } catch (err: any) {
+    console.error(`⚠️  [cron] Failed to record sync log for ${type}:`, err.message);
   }
 }
 

@@ -361,3 +361,15 @@ model CustomerVisit {
   customer Customer @relation(fields: [customerId], references: [id])
 }
 
+model SyncLog {
+  id               String   @id @default(uuid())
+  syncType         String   // e.g. "products", "customers", "orders", "all", "products:cron"
+  source           String   @default("manual") // "manual" | "cron" | "webhook"
+  status           String   // "success" | "failed" | "queued"
+  recordsProcessed Int      @default(0)
+  message          String?
+  createdAt        DateTime @default(now())
+
+  @@index([syncType, createdAt])
+}
+

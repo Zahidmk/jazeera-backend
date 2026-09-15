@@ -8,6 +8,16 @@ import {
   getQueueStats,
 } from '../utils/queue';
 
+async function logSync(syncType: string, status: 'success' | 'failed' | 'queued', recordsProcessed: number, message?: string) {
+  try {
+    await prisma.syncLog.create({
+      data: { syncType, source: 'manual', status, recordsProcessed, message },
+    });
+  } catch (err: any) {
+    console.error(`⚠️  Failed to write sync log for ${syncType}:`, err.message);
+  }
+}
+
 // ─── Test Odoo Connection ───────────────────────────────
 export const testConnection = async (_req: Request, res: Response) => {
   try {
@@ -39,6 +49,7 @@ export const syncProducts = async (_req: Request, res: Response) => {
     if (process.env.DISABLE_REDIS === 'true') {
       const syncService = require('../services/odoo/sync.service');
       const result = await syncService.syncProducts();
+      await logSync('products', 'success', result.total, `${result.created} created, ${result.updated} updated`);
       res.json({
         success: true,
         message: 'Products synced synchronously (Redis is disabled)',
@@ -48,6 +59,7 @@ export const syncProducts = async (_req: Request, res: Response) => {
     }
 
     const job = await enqueueProductSync({ type: 'full_sync' });
+    await logSync('products', 'queued', 0, `Job ${job.id} queued`);
     res.json({
       success: true,
       message: 'Product sync job queued',
@@ -55,6 +67,7 @@ export const syncProducts = async (_req: Request, res: Response) => {
       note: 'Check /api/v1/sync/queue-status for progress',
     });
   } catch (error: any) {
+    await logSync('products', 'failed', 0, error.message);
     res.status(500).json({ success: false, error: `Failed to sync products: ${error.message}` });
   }
 };
@@ -65,6 +78,7 @@ export const syncCustomers = async (_req: Request, res: Response) => {
     if (process.env.DISABLE_REDIS === 'true') {
       const syncService = require('../services/odoo/sync.service');
       const result = await syncService.syncCustomers();
+      await logSync('customers', 'success', result.total, `${result.created} created, ${result.updated} updated`);
       res.json({
         success: true,
         message: 'Customers synced synchronously (Redis is disabled)',
@@ -74,6 +88,7 @@ export const syncCustomers = async (_req: Request, res: Response) => {
     }
 
     const job = await enqueueCustomerSync({ type: 'full_sync' });
+    await logSync('customers', 'queued', 0, `Job ${job.id} queued`);
     res.json({
       success: true,
       message: 'Customer sync job queued',
@@ -81,6 +96,7 @@ export const syncCustomers = async (_req: Request, res: Response) => {
       note: 'Check /api/v1/sync/queue-status for progress',
     });
   } catch (error: any) {
+    await logSync('customers', 'failed', 0, error.message);
     res.status(500).json({ success: false, error: `Failed to sync customers: ${error.message}` });
   }
 };
@@ -104,6 +120,7 @@ export const syncOrders = async (req: Request, res: Response) => {
     if (process.env.DISABLE_REDIS === 'true') {
       const syncService = require('../services/odoo/sync.service');
       const result = await syncService.syncOrders(driverId);
+      await logSync('orders', 'success', result.total, `${result.created} created, ${result.skipped} skipped`);
       res.json({
         success: true,
         message: 'Orders synced synchronously (Redis is disabled)',
@@ -113,6 +130,7 @@ export const syncOrders = async (req: Request, res: Response) => {
     }
 
     const job = await enqueueOrderSync({ type: 'full_sync', driverId });
+    await logSync('orders', 'queued', 0, `Job ${job.id} queued`);
     res.json({
       success: true,
       message: 'Order sync job queued',
@@ -120,6 +138,7 @@ export const syncOrders = async (req: Request, res: Response) => {
       note: 'Check /api/v1/sync/queue-status for progress',
     });
   } catch (error: any) {
+    await logSync('orders', 'failed', 0, error.message);
     res.status(500).json({ success: false, error: `Failed to sync orders: ${error.message}` });
   }
 };
@@ -143,6 +162,8 @@ export const syncAll = async (req: Request, res: Response) => {
     if (process.env.DISABLE_REDIS === 'true') {
       const syncService = require('../services/odoo/sync.service');
       const result = await syncService.syncAll(driverId);
+      const total = (result.products?.total ?? 0) + (result.customers?.total ?? 0) + (result.orders?.total ?? 0);
+      await logSync('all', 'success', total, 'Products + customers + orders synced');
       res.json({
         success: true,
         message: 'Full sync executed synchronously (Redis is disabled)',
@@ -156,6 +177,7 @@ export const syncAll = async (req: Request, res: Response) => {
       enqueueCustomerSync({ type: 'full_sync' }),
       enqueueOrderSync({ type: 'full_sync', driverId }),
     ]);
+    await logSync('all', 'queued', 0, `Jobs queued: ${pJob.id}, ${cJob.id}, ${oJob.id}`);
     res.json({
       success: true,
       message: 'Full sync queued (products + customers + orders)',
@@ -163,6 +185,7 @@ export const syncAll = async (req: Request, res: Response) => {
       note: 'Check /api/v1/sync/queue-status for progress',
     });
   } catch (error: any) {
+    await logSync('all', 'failed', 0, error.message);
     res.status(500).json({ success: false, error: `Failed to sync all: ${error.message}` });
   }
 };
@@ -175,5 +198,27 @@ export const queueStatus = async (_req: Request, res: Response) => {
     res.json({ success: true, data: stats, timestamp: new Date().toISOString() });
   } catch (error: any) {
     res.status(500).json({ success: false, error: `Failed to get queue stats: ${error.message}` });
+  }
+};
+
+// ─── Sync Logs ───────────────────────────────────────────
+// History of manual + cron sync runs, most recent first
+export const syncLogs = async (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(parseInt(String(req.query.limit ?? '50'), 10) || 50, 200);
+    const { status, syncType } = req.query;
+
+    const logs = await prisma.syncLog.findMany({
+      where: {
+        ...(status ? { status: String(status) } : {}),
+        ...(syncType ? { syncType: String(syncType) } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+
+    res.json({ success: true, data: logs });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: `Failed to get sync logs: ${error.message}` });
   }
 };
