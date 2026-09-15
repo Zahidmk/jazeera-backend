@@ -86,6 +86,7 @@ export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
         email: true,
         phone: true,
         role: true,
+        createdAt: true,
         van: { select: { id: true, plateNumber: true, model: true } },
         shifts: {
           where: { status: 'ACTIVE' },
@@ -106,6 +107,57 @@ export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: 'Failed to get user' });
+  }
+};
+
+// ─── PATCH /api/v1/auth/me ────────────────────────────────────────────────────
+export const updateMe = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { name, email, phone, currentPassword, newPassword } = req.body;
+    const userId = req.user!.userId;
+
+    const data: Record<string, unknown> = {};
+    if (name !== undefined) {
+      if (!String(name).trim()) {
+        res.status(400).json({ success: false, error: 'Name cannot be empty' });
+        return;
+      }
+      data.name = String(name).trim();
+    }
+    if (email !== undefined) data.email = String(email).trim().toLowerCase();
+    if (phone !== undefined) data.phone = phone ? String(phone).trim() : null;
+
+    if (newPassword) {
+      if (!currentPassword) {
+        res.status(400).json({ success: false, error: 'Current password is required to set a new password' });
+        return;
+      }
+      const existing = await prisma.user.findUnique({ where: { id: userId }, select: { passwordHash: true } });
+      if (!existing || !(await bcrypt.compare(currentPassword, existing.passwordHash))) {
+        res.status(401).json({ success: false, error: 'Current password is incorrect' });
+        return;
+      }
+      if (String(newPassword).length < 8) {
+        res.status(400).json({ success: false, error: 'New password must be at least 8 characters' });
+        return;
+      }
+      data.passwordHash = await bcrypt.hash(newPassword, 10);
+    }
+
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data,
+      select: { id: true, name: true, email: true, phone: true, role: true, createdAt: true },
+    });
+
+    res.json({ success: true, data: user });
+  } catch (err: any) {
+    if (err.code === 'P2002') {
+      res.status(409).json({ success: false, error: 'Email or phone already in use' });
+    } else {
+      console.error(err);
+      res.status(500).json({ success: false, error: 'Failed to update profile' });
+    }
   }
 };
 
