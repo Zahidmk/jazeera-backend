@@ -27,6 +27,7 @@ import {
   rejectLead,
 } from '../controllers/admin.controller';
 import { exportReport, getReportsSummary } from '../controllers/reports.controller';
+import { retryOdooSync } from '../controllers/cashSale.controller';
 import { exportRules, validate } from '../middleware/validators';
 
 const router = Router();
@@ -42,6 +43,9 @@ router.get('/deliveries', getDeliveries);
 
 // GET /api/v1/admin/sales?date=&driverId=&page=&limit=
 router.get('/sales', getSales);
+
+// POST /api/v1/admin/cash-sales/:id/retry-sync — retry a failed Odoo push
+router.post('/cash-sales/:id/retry-sync', retryOdooSync);
 
 // GET /api/v1/admin/drivers
 router.get('/drivers', getDrivers);

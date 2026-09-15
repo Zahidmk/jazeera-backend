@@ -1,4 +1,4 @@
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
@@ -349,14 +349,27 @@ async function pushSaleToOdoo(
         console.log(`✅ Odoo: Created new partner in Odoo with ID ${partnerOdooId} for ${customerName}`);
       }
 
-      // Update our local customer record
-      await prisma.customer.update({
-        where: { id: customerId },
-        data: { odooId: partnerOdooId },
-      });
+      // Update our local customer record. This can legitimately fail with a
+      // unique-constraint error on odooId when a different local Customer
+      // row shares this partner's phone/name and already claimed the same
+      // Odoo partner (e.g. two walk-in sales entered under different names
+      // but the same phone number) — that's a local bookkeeping detail, not
+      // a reason to abandon the sale push, since we already have a valid
+      // partnerOdooId to create the order with.
+      try {
+        await prisma.customer.update({
+          where: { id: customerId },
+          data: { odooId: partnerOdooId },
+        });
+      } catch (linkErr: any) {
+        console.warn(
+          `⚠️ Could not link customer ${customerId} to Odoo partner ${partnerOdooId} locally (likely already claimed by another local customer with the same phone) — continuing with sale push anyway:`,
+          linkErr?.message
+        );
+      }
     } catch (err: any) {
-      console.error(`⚠️ Odoo Partner Creation Failed for customer ${customerId}:`, err?.message);
-      return; // Skip sync as we need a partner ID
+      console.error(`⚠️ Odoo Partner Lookup/Creation Failed for customer ${customerId}:`, err?.message);
+      return; // Skip sync — we truly have no partner ID
     }
   }
 
@@ -442,6 +455,52 @@ async function pushSaleToOdoo(
   await odoo.validateDeliveryForSaleOrder(odooSaleId);
   console.log(`✅ Odoo: Cash sale ${saleId} fully synced — SO ${odooSaleId} confirmed and delivery validated`);
 }
+
+// ─── POST /api/v1/admin/cash-sales/:id/retry-sync ────────────────────────────
+// Manually retry the Odoo push for a cash sale that never got an odooSaleId
+// (e.g. it failed because a different local customer already owned the
+// matching Odoo partner — see the non-fatal handling above, fixed going
+// forward, but sales created before that fix can still be stuck).
+export const retryOdooSync = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const sale = await prisma.cashSale.findUnique({ where: { id }, include: { items: true } });
+
+    if (!sale) {
+      res.status(404).json({ success: false, error: 'Cash sale not found' });
+      return;
+    }
+    if (sale.odooSaleId) {
+      res.status(400).json({ success: false, error: `Already synced to Odoo as sale order ${sale.odooSaleId}` });
+      return;
+    }
+    if (!sale.customerId) {
+      res.status(400).json({ success: false, error: 'Sale has no linked customer to push to Odoo' });
+      return;
+    }
+
+    const van = await prisma.van.findFirst({ where: { driverId: sale.driverId } });
+    if (!van) {
+      res.status(400).json({ success: false, error: 'Driver has no assigned van' });
+      return;
+    }
+
+    const cart = sale.items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      discount: item.discount,
+    }));
+
+    await pushSaleToOdoo(sale.id, sale.customerId, cart, van.id);
+
+    const updated = await prisma.cashSale.findUnique({ where: { id } });
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    console.error(`⚠️ Retry Odoo sync failed:`, err?.message);
+    res.status(500).json({ success: false, error: `Retry failed: ${err.message}` });
+  }
+};
 
 // ─── POST /api/v1/driver/sales/:id/receipt ───────────────────────────────────
 export const uploadReceipt = async (req: AuthRequest, res: Response): Promise<void> => {
