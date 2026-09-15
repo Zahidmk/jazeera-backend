@@ -6,32 +6,68 @@ import odoo from '../services/odoo/odoo.service';
 // ─── GET /api/v1/admin/stats ──────────────────────────────────────────────────
 export const getStats = async (_req: Request, res: Response): Promise<void> => {
   try {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(startOfToday);
+    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+
     const [
       totalDrivers,
       totalDeliveries,
       deliveredCount,
       failedCount,
+      pendingDeliveries,
       totalSalesRevenue,
+      todaySalesRevenue,
+      weekSalesRevenue,
       totalProducts,
       lowStockCount,
+      activeVans,
+      totalVans,
+      leadsToday,
+      leadsPendingApproval,
+      usersByRole,
+      revenueByDriver,
+      vansWithDriver,
     ] = await Promise.all([
       prisma.user.count({ where: { role: 'DRIVER', isActive: true } }),
       prisma.delivery.count(),
       prisma.delivery.count({ where: { status: 'DELIVERED' } }),
       prisma.delivery.count({ where: { status: 'FAILED' } }),
+      prisma.delivery.count({ where: { status: { in: ['PENDING', 'IN_PROGRESS'] } } }),
       prisma.cashSale.aggregate({ _sum: { totalAmount: true } }),
+      prisma.cashSale.aggregate({ _sum: { totalAmount: true }, where: { createdAt: { gte: startOfToday } } }),
+      prisma.cashSale.aggregate({ _sum: { totalAmount: true }, where: { createdAt: { gte: startOfWeek } } }),
       prisma.product.count({ where: { isActive: true } }),
       prisma.vanInventory.count({ where: { quantity: { lt: 5 } } }),
+      prisma.van.count({ where: { isActive: true } }),
+      prisma.van.count(),
+      prisma.lead.count({ where: { createdAt: { gte: startOfToday } } }),
+      prisma.lead.count({ where: { status: 'PENDING' } }),
+      prisma.user.groupBy({ by: ['role'], _count: { role: true } }),
+      prisma.cashSale.groupBy({ by: ['driverId'], _sum: { totalAmount: true } }),
+      prisma.van.findMany({ where: { driverId: { not: null } }, select: { id: true, plateNumber: true, driverId: true } }),
     ]);
+
+    const revenueByVan = vansWithDriver
+      .map((van) => {
+        const rev = revenueByDriver.find((r) => r.driverId === van.driverId);
+        return { vanId: van.id, plateNumber: van.plateNumber, revenue: parseFloat((rev?._sum.totalAmount ?? 0).toFixed(2)) };
+      })
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 5);
 
     res.json({
       success: true,
       data: {
         drivers: { total: totalDrivers },
+        vans: { active: activeVans, total: totalVans, topByRevenue: revenueByVan },
+        usersByRole: usersByRole.map((r) => ({ role: r.role, count: r._count.role })),
         deliveries: {
           total: totalDeliveries,
           delivered: deliveredCount,
           failed: failedCount,
+          pending: pendingDeliveries,
           successRate:
             totalDeliveries > 0
               ? parseFloat(((deliveredCount / totalDeliveries) * 100).toFixed(1))
@@ -39,15 +75,21 @@ export const getStats = async (_req: Request, res: Response): Promise<void> => {
         },
         sales: {
           totalRevenue: parseFloat((totalSalesRevenue._sum.totalAmount ?? 0).toFixed(2)),
+          todayRevenue: parseFloat((todaySalesRevenue._sum.totalAmount ?? 0).toFixed(2)),
+          weekRevenue: parseFloat((weekSalesRevenue._sum.totalAmount ?? 0).toFixed(2)),
         },
         stock: {
           totalProducts,
           lowStockAlerts: lowStockCount,
         },
+        leads: {
+          today: leadsToday,
+          pendingApproval: leadsPendingApproval,
+        },
       },
     });
   } catch (err) {
-    console.error("CRASH IN WAREHOUSE:", err);
+    console.error("Failed to get admin stats:", err);
     res.status(500).json({ success: false, error: 'Failed to get stats' });
   }
 };
