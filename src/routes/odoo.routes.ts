@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { authenticate, authorizeRoles } from '../middleware/auth';
+import { BACKOFFICE_ROLES } from '../constants/roles';
 import {
   getOdooProducts,
   getOdooOrders,
@@ -8,8 +10,12 @@ import {
 
 const router = Router();
 
+// Live Odoo data is back-office only
+router.use(authenticate);
+router.use(authorizeRoles(...BACKOFFICE_ROLES));
+
 // ─── Direct Odoo data (no DB sync required) ──────────────────────────────────
-// These endpoints fetch live from Odoo XML-RPC — used by the admin dashboard
+// These endpoints fetch live from Odoo XML-RPC — used by the admin dashboard (ADMIN / MANAGER only)
 
 // GET /api/v1/odoo/products?limit=500
 router.get('/products', getOdooProducts);

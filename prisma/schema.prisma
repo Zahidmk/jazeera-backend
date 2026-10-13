@@ -15,6 +15,7 @@ enum Role {
   RELAY_REP
   STORE_KEEPER
   SALESMAN
+  MERCHANDISER
 }
 
 enum DeliveryStatus {
@@ -64,12 +65,12 @@ enum AdjustmentStatus {
 // ─── Models ──────────────────────────────────────────────
 
 model User {
-  id           String   @id @default(uuid())
-  name         String
-  email        String   @unique
-  phone        String?  @unique
-  passwordHash String
-  role         Role     @default(DRIVER)
+  id             String   @id @default(uuid())
+  name           String
+  email          String   @unique
+  phone          String?  @unique
+  passwordHash   String
+  role           Role     @default(DRIVER)
   isActive       Boolean  @default(true)
   odooEmployeeId Int?
   createdAt      DateTime @default(now())
@@ -83,22 +84,29 @@ model User {
   adjustments StockAdjustment[]
   quotations  Quotation[]       @relation("SalesmanQuotes")
   visits      CustomerVisit[]   @relation("SalesmanVisits")
+
+  // Merchandiser (Phase 2)
+  attendances   Attendance[]   @relation("MerchandiserAttendance")
+  devices       UserDevice[]
+  shopVisits    ShopVisit[]    @relation("MerchandiserVisits")
+  shopFeedbacks ShopFeedback[] @relation("MerchandiserFeedback")
+  shopsCreated  Customer[]     @relation("ShopCreator")
 }
 
 model Van {
-  id               String   @id @default(uuid())
-  plateNumber      String   @unique
-  model            String?
-  isActive         Boolean  @default(true)
-  odooLocationId   Int?     // Odoo stock.location ID for this van (virtual warehouse)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id             String   @id @default(uuid())
+  plateNumber    String   @unique
+  model          String?
+  isActive       Boolean  @default(true)
+  odooLocationId Int? // Odoo stock.location ID for this van (virtual warehouse)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  driverId  String?        @unique
-  driver    User?          @relation("VanDriver", fields: [driverId], references: [id])
-  inventory VanInventory[]
-  shifts    Shift[]
-  stockQueue StockLoadQueue[]
+  driverId    String?           @unique
+  driver      User?             @relation("VanDriver", fields: [driverId], references: [id])
+  inventory   VanInventory[]
+  shifts      Shift[]
+  stockQueue  StockLoadQueue[]
   adjustments StockAdjustment[]
 }
 
@@ -118,11 +126,11 @@ model Product {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  vanInventory  VanInventory[]
-  stockQueue    StockLoadQueue[]
-  deliveryItems DeliveryItem[]
-  cashSaleItems CashSaleItem[]
-  adjustments   StockAdjustment[]
+  vanInventory   VanInventory[]
+  stockQueue     StockLoadQueue[]
+  deliveryItems  DeliveryItem[]
+  cashSaleItems  CashSaleItem[]
+  adjustments    StockAdjustment[]
   quotationItems QuotationItem[]
 }
 
@@ -152,10 +160,10 @@ model Route {
 }
 
 model Customer {
-  id        String   @id @default(uuid())
-  odooId    Int?     @unique
-  name      String
-  phone     String?
+  id             String   @id @default(uuid())
+  odooId         Int?     @unique
+  name           String
+  phone          String?
   email          String?
   address        String?
   street         String?
@@ -165,14 +173,25 @@ model Customer {
   buildingNumber String?
   lat            Float?
   lng            Float?
+  // Shop registration by a Merchandiser (Phase 2) — all optional, untouched by the Odoo sync
+  contactPerson  String?
+  shopType       String?
+  notes          String?
+  createdById    String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  createdBy  User?           @relation("ShopCreator", fields: [createdById], references: [id])
   deliveries Delivery[]
   cashSales  CashSale[]
   leads      Lead[]
   quotations Quotation[]
   visits     CustomerVisit[]
+  shopVisits ShopVisit[]
+  feedbacks  ShopFeedback[]
+
+  @@index([createdById])
+  @@index([lat, lng])
 }
 
 model Shift {
@@ -228,7 +247,7 @@ model Delivery {
 }
 
 model DeliveryItem {
-  id         String   @id @default(uuid())
+  id         String @id @default(uuid())
   deliveryId String
   productId  String
   quantity   Int
@@ -239,56 +258,56 @@ model DeliveryItem {
 }
 
 model CashSale {
-  id              String   @id @default(uuid())
-  driverId        String
-  customerId      String?
-  saleType        SaleType @default(CASH)
-  totalAmount     Float
-  subtotalAmount  Float?   // Amount before VAT, as computed by Odoo (amount_untaxed)
-  vatAmount       Float?   // VAT amount, as computed by Odoo (amount_tax)
-  receiptUrl      String?
-  odooSaleId      Int?
-  latitude        Float?
-  longitude       Float?
-  createdAt       DateTime @default(now())
+  id             String   @id @default(uuid())
+  driverId       String
+  customerId     String?
+  saleType       SaleType @default(CASH)
+  totalAmount    Float
+  subtotalAmount Float? // Amount before VAT, as computed by Odoo (amount_untaxed)
+  vatAmount      Float? // VAT amount, as computed by Odoo (amount_tax)
+  receiptUrl     String?
+  odooSaleId     Int?
+  latitude       Float?
+  longitude      Float?
+  createdAt      DateTime @default(now())
 
-  driver   User          @relation(fields: [driverId], references: [id])
-  customer Customer?     @relation(fields: [customerId], references: [id])
+  driver   User           @relation(fields: [driverId], references: [id])
+  customer Customer?      @relation(fields: [customerId], references: [id])
   items    CashSaleItem[]
 }
 
 model CashSaleItem {
-  id        String  @id @default(uuid())
+  id        String @id @default(uuid())
   saleId    String
   productId String
   quantity  Int
   unitPrice Float
-  discount  Float   @default(0)
+  discount  Float  @default(0)
 
   sale    CashSale @relation(fields: [saleId], references: [id])
   product Product  @relation(fields: [productId], references: [id])
 }
 
 model Lead {
-  id         String     @id @default(uuid())
-  driverId   String
-  customerId String?
-  name       String
-  phone      String?
-  address    String?
+  id             String     @id @default(uuid())
+  driverId       String
+  customerId     String?
+  name           String
+  phone          String?
+  address        String?
   street         String?
   district       String?
   city           String?
   zip            String?
   buildingNumber String?
-  notes      String?
-  lat        Float?
-  lng        Float?
-  status     LeadStatus @default(PENDING)
-  approvedAt DateTime?
-  rejectedAt DateTime?
-  odooLeadId Int?
-  createdAt  DateTime   @default(now())
+  notes          String?
+  lat            Float?
+  lng            Float?
+  status         LeadStatus @default(PENDING)
+  approvedAt     DateTime?
+  rejectedAt     DateTime?
+  odooLeadId     Int?
+  createdAt      DateTime   @default(now())
 
   driver   User      @relation(fields: [driverId], references: [id])
   customer Customer? @relation(fields: [customerId], references: [id])
@@ -319,32 +338,32 @@ enum QuotationStatus {
 }
 
 model Quotation {
-  id             String          @id @default(uuid())
-  salesmanId     String
-  customerId     String?
-  status         QuotationStatus @default(DRAFT)
-  totalAmount    Float           @default(0)
-  remarks        String?
+  id              String          @id @default(uuid())
+  salesmanId      String
+  customerId      String?
+  status          QuotationStatus @default(DRAFT)
+  totalAmount     Float           @default(0)
+  remarks         String?
   rejectionReason String?
-  pdfUrl         String?
+  pdfUrl          String?
   odooQuotationId Int?            @unique
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
-  salesman User          @relation("SalesmanQuotes", fields: [salesmanId], references: [id])
-  customer Customer?     @relation(fields: [customerId], references: [id])
+  salesman User            @relation("SalesmanQuotes", fields: [salesmanId], references: [id])
+  customer Customer?       @relation(fields: [customerId], references: [id])
   items    QuotationItem[]
 }
 
 model QuotationItem {
-  id             String    @id @default(uuid())
+  id             String  @id @default(uuid())
   quotationId    String
   productId      String
   quantity       Int
   unitPrice      Float
-  requestedPrice Float?    // Customer requested price
-  discountPct    Float     @default(0)
-  suggestedMode  Boolean   @default(false) // Suggested price toggle mode
+  requestedPrice Float? // Customer requested price
+  discountPct    Float   @default(0)
+  suggestedMode  Boolean @default(false) // Suggested price toggle mode
 
   quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
   product   Product   @relation(fields: [productId], references: [id])
@@ -365,9 +384,9 @@ model CustomerVisit {
 
 model SyncLog {
   id               String   @id @default(uuid())
-  syncType         String   // e.g. "products", "customers", "orders", "all", "products:cron"
+  syncType         String // e.g. "products", "customers", "orders", "all", "products:cron"
   source           String   @default("manual") // "manual" | "cron" | "webhook"
-  status           String   // "success" | "failed" | "queued"
+  status           String // "success" | "failed" | "queued"
   recordsProcessed Int      @default(0)
   message          String?
   createdAt        DateTime @default(now())
@@ -375,3 +394,132 @@ model SyncLog {
   @@index([syncType, createdAt])
 }
 
+// ─── Merchandiser (Phase 2) ──────────────────────────────
+
+enum VisitStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum FeedbackCategory {
+  STOCK
+  DISPLAY
+  PRICING
+  COMPETITOR
+  SERVICE
+  OTHER
+}
+
+enum FeedbackStatus {
+  NEW
+  REVIEWED
+  RESOLVED
+}
+
+/// A trusted phone. The first device a user checks in with is auto-approved; any further device needs admin approval.
+model UserDevice {
+  id           String    @id @default(uuid())
+  userId       String
+  deviceId     String
+  label        String?
+  isApproved   Boolean   @default(false)
+  approvedById String?
+  approvedAt   DateTime?
+  firstSeenAt  DateTime  @default(now())
+  lastSeenAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, deviceId])
+}
+
+model Attendance {
+  id             String  @id @default(uuid())
+  merchandiserId String
+  /// = merchandiserId while checked in, NULL after check-out. The unique index guarantees one open attendance per user.
+  openKey        String? @unique
+
+  checkInAt              DateTime  @default(now())
+  checkInDeviceTime      DateTime?
+  checkInLat             Float
+  checkInLng             Float
+  checkInAccuracy        Float?
+  checkInSelfie          String
+  checkInDeviceId        String
+  checkInBiometric       Boolean
+  checkInBiometricMethod String?
+
+  checkOutAt              DateTime?
+  checkOutDeviceTime      DateTime?
+  checkOutLat             Float?
+  checkOutLng             Float?
+  checkOutAccuracy        Float?
+  checkOutSelfie          String?
+  checkOutDeviceId        String?
+  checkOutBiometric       Boolean?
+  checkOutBiometricMethod String?
+  closedByAdminId         String?
+
+  flagged   Boolean  @default(false)
+  adminNote String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  merchandiser User        @relation("MerchandiserAttendance", fields: [merchandiserId], references: [id])
+  visits       ShopVisit[]
+
+  @@index([merchandiserId, checkInAt])
+  @@index([checkInAt])
+}
+
+model ShopVisit {
+  id             String      @id @default(uuid())
+  merchandiserId String
+  customerId     String
+  attendanceId   String?
+  /// = merchandiserId while the visit is in progress, NULL once completed (one open visit per user).
+  openKey        String?     @unique
+  status         VisitStatus @default(IN_PROGRESS)
+
+  startedAt      DateTime @default(now())
+  startLat       Float
+  startLng       Float
+  startDistanceM Float?
+  outOfRange     Boolean  @default(false)
+
+  endedAt DateTime?
+  endLat  Float?
+  endLng  Float?
+  notes   String?
+
+  merchandiser User           @relation("MerchandiserVisits", fields: [merchandiserId], references: [id])
+  customer     Customer       @relation(fields: [customerId], references: [id])
+  attendance   Attendance?    @relation(fields: [attendanceId], references: [id])
+  feedback     ShopFeedback[]
+
+  @@index([merchandiserId, startedAt])
+  @@index([customerId, startedAt])
+}
+
+model ShopFeedback {
+  id               String           @id @default(uuid())
+  visitId          String
+  customerId       String
+  merchandiserId   String
+  category         FeedbackCategory @default(OTHER)
+  rating           Int?
+  comments         String
+  followUpRequired Boolean          @default(false)
+  status           FeedbackStatus   @default(NEW)
+  reviewedById     String?
+  reviewedAt       DateTime?
+  adminNote        String?
+  createdAt        DateTime         @default(now())
+
+  visit        ShopVisit @relation(fields: [visitId], references: [id])
+  customer     Customer  @relation(fields: [customerId], references: [id])
+  merchandiser User      @relation("MerchandiserFeedback", fields: [merchandiserId], references: [id])
+
+  @@index([status, createdAt])
+  @@index([customerId])
+}

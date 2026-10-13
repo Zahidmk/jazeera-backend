@@ -22,6 +22,7 @@
  *  customer.updated → enqueue single_upsert job
  */
 
+import crypto from 'crypto';
 import { Request, Response } from 'express';
 import {
   enqueueProductSync,
@@ -34,10 +35,19 @@ export const handleWebhook = async (req: Request, res: Response): Promise<void> 
   const start = Date.now();
 
   // ── 1. Verify webhook secret ───────────────────────────────────────────────
+  // Fail closed: if no secret is configured the webhook is disabled rather than open to anyone.
   const secret = req.headers['x-odoo-webhook-secret'];
   const expectedSecret = process.env.ODOO_WEBHOOK_SECRET || '';
 
-  if (expectedSecret && secret !== expectedSecret) {
+  if (!expectedSecret) {
+    console.error('❌ ODOO_WEBHOOK_SECRET is not set — rejecting webhook');
+    res.status(503).json({ success: false, error: 'Webhook is not configured' });
+    return;
+  }
+
+  const provided = Buffer.from(typeof secret === 'string' ? secret : '');
+  const expected = Buffer.from(expectedSecret);
+  if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
     res.status(401).json({ success: false, error: 'Invalid webhook secret' });
     return;
   }

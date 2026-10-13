@@ -4,13 +4,22 @@ import jwt from 'jsonwebtoken';
 import prisma from '../utils/prisma';
 import { AuthRequest } from '../types';
 
+// Build the identity filter from only the fields actually supplied. Passing `{ email: undefined }`
+// inside an OR makes Prisma match *every* row, which would let findFirst return an arbitrary user.
+const identityFilter = (email: unknown, phone: unknown) => {
+  const conditions: { email?: string; phone?: string }[] = [];
+  if (typeof email === 'string' && email.trim()) conditions.push({ email: email.trim() });
+  if (typeof phone === 'string' && phone.trim()) conditions.push({ phone: phone.trim() });
+  return conditions;
+};
+
 // ─── POST /api/v1/auth/login ─────────────────────────────────────────────────
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, phone, password } = req.body;
-    console.log("LOGIN BODY:", req.body);
+    const conditions = identityFilter(email, phone);
 
-    if (!password || (!email && !phone)) {
+    if (typeof password !== 'string' || !password || conditions.length === 0) {
       res.status(400).json({ success: false, error: 'Email or phone and password are required' });
       return;
     }
@@ -18,10 +27,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     const user = await prisma.user.findFirst({
       where: {
         isActive: true,
-        OR: [
-          { email: email ?? undefined },
-          { phone: phone ?? undefined },
-        ],
+        OR: conditions,
       },
       include: { 
         van: { select: { id: true, plateNumber: true } },
@@ -31,7 +37,6 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         }
       },
     });
-    console.log("USER FOUND:", !!user);
 
     if (!user) {
       res.status(401).json({ success: false, error: 'Invalid credentials' });
@@ -39,7 +44,6 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     const passwordMatch = await bcrypt.compare(password, user.passwordHash);
-    console.log("PASSWORD MATCH:", passwordMatch);
     if (!passwordMatch) {
       res.status(401).json({ success: false, error: 'Invalid credentials' });
       return;
@@ -165,16 +169,11 @@ export const updateMe = async (req: AuthRequest, res: Response): Promise<void> =
 export const forgotPassword = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, phone } = req.body;
+    const conditions = identityFilter(email, phone);
 
-    const user = await prisma.user.findFirst({
-      where: {
-        isActive: true,
-        OR: [
-          { email: email ?? undefined },
-          { phone: phone ?? undefined },
-        ],
-      },
-    });
+    const user = conditions.length
+      ? await prisma.user.findFirst({ where: { isActive: true, OR: conditions } })
+      : null;
 
     // Always return success to avoid user enumeration
     res.json({

@@ -4,3 +4,6 @@ node_modules
 
 /generated/prisma
 dist/
+
+# Private user uploads (attendance selfies) — never commit
+private-uploads/

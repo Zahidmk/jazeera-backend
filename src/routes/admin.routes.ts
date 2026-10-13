@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware/auth';
+import { authenticate, authorizeRoles } from '../middleware/auth';
+import { BACKOFFICE_ROLES } from '../constants/roles';
 import {
   getStats,
   getDeliveries,
@@ -26,14 +27,31 @@ import {
   approveLead,
   rejectLead,
 } from '../controllers/admin.controller';
+import {
+  getMerchandisers,
+  getAttendance,
+  getAttendanceById,
+  getAttendanceSelfie,
+  updateAttendance,
+  getDevices,
+  updateDevice,
+  getShops,
+  getShopDetail,
+  updateShop,
+  getShopVisits,
+  getShopVisitById,
+  getFeedback,
+  reviewFeedback,
+} from '../controllers/merchandiserAdmin.controller';
 import { exportReport, getReportsSummary } from '../controllers/reports.controller';
 import { retryOdooSync } from '../controllers/cashSale.controller';
 import { exportRules, validate } from '../middleware/validators';
 
 const router = Router();
 
-// All admin routes require authentication
+// All admin routes require authentication AND a back-office role (ADMIN / MANAGER)
 router.use(authenticate);
+router.use(authorizeRoles(...BACKOFFICE_ROLES));
 
 // GET /api/v1/admin/stats
 router.get('/stats', getStats);
@@ -87,6 +105,22 @@ router.patch('/customers/:id/location', updateCustomerLocation);
 router.get('/leads', getLeads);
 router.patch('/leads/:id/approve', approveLead);
 router.patch('/leads/:id/reject', rejectLead);
+
+// ── Merchandiser module (Phase 2) ─────────────────────────────────────────────
+router.get('/merchandisers', getMerchandisers);
+router.get('/attendance', getAttendance);
+router.get('/attendance/:id', getAttendanceById);
+router.get('/attendance/:id/selfie', getAttendanceSelfie);
+router.patch('/attendance/:id', updateAttendance);
+router.get('/devices', getDevices);
+router.patch('/devices/:id', updateDevice);
+router.get('/shops', getShops);
+router.get('/shops/:id', getShopDetail);
+router.patch('/shops/:id', updateShop);
+router.get('/shop-visits', getShopVisits);
+router.get('/shop-visits/:id', getShopVisitById);
+router.get('/feedback', getFeedback);
+router.patch('/feedback/:id', reviewFeedback);
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 router.get('/settings', getSettings);

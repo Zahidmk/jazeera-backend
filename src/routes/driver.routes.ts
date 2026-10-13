@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware/auth';
+import { authenticate, authorizeRoles } from '../middleware/auth';
+import { DRIVER_APP_ROLES } from '../constants/roles';
 import {
   getHome,
   getRoute,
@@ -27,8 +28,9 @@ import {
 
 const router = Router();
 
-// All driver routes require authentication
+// All driver routes require authentication and a driver-app role
 router.use(authenticate);
+router.use(authorizeRoles(...DRIVER_APP_ROLES));
 
 // Home & Route
 router.get('/home', getHome);

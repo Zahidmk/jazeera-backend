@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware/auth';
+import { authenticate, authorizeRoles } from '../middleware/auth';
+import { BACKOFFICE_ROLES } from '../constants/roles';
 import {
   testConnection,
   syncProducts,
@@ -13,22 +14,27 @@ import { handleWebhook } from '../controllers/webhook.controller';
 
 const router = Router();
 
-// Test Odoo connection (no auth needed for testing)
+// ─── Odoo Webhook (no JWT — Odoo pushes here; secured by X-Odoo-Webhook-Secret)
+// Must be registered BEFORE the JWT guard below.
+router.post('/webhook', handleWebhook);
+
+// Everything below requires a logged-in ADMIN / MANAGER
+router.use(authenticate);
+router.use(authorizeRoles(...BACKOFFICE_ROLES));
+
+// Test Odoo connection
 router.get('/test', testConnection);
 
-// Queue status — live Redis job counts (no auth for dashboard visibility)
+// Queue status — live Redis job counts
 router.get('/queue-status', queueStatus);
 
-// Sync history (no auth for dashboard visibility, matches queue-status)
+// Sync history
 router.get('/logs', syncLogs);
 
-// Sync endpoints (no auth for easy dashboard integration)
+// Manual sync triggers
 router.post('/products', syncProducts);
 router.post('/customers', syncCustomers);
 router.post('/orders', syncOrders);
 router.post('/all', syncAll);
-
-// ─── Odoo Webhook (no JWT — Odoo pushes here; secured by X-Odoo-Webhook-Secret)
-router.post('/webhook', handleWebhook);
 
 export default router;

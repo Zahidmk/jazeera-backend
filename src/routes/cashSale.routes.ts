@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware/auth';
+import { authenticate, authorizeRoles } from '../middleware/auth';
+import { DRIVER_APP_ROLES } from '../constants/roles';
 import {
   getCart,
   addCartItem,
@@ -18,6 +19,7 @@ import {
 const router = Router();
 
 router.use(authenticate);
+router.use(authorizeRoles(...DRIVER_APP_ROLES));
 
 router.get('/cart', getCart);
 router.post('/cart/items', addCartItemRules, validate, addCartItem);

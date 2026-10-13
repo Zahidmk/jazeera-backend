@@ -728,7 +728,7 @@ export const addLead = async (req: AuthRequest, res: Response): Promise<void> =>
 };
 
 // ─── Helper: push lead to Odoo CRM & save odooLeadId ─────────────────────────
-async function pushLeadToOdoo(
+export async function pushLeadToOdoo(
   leadId: string,
   data: { 
     name: string; 

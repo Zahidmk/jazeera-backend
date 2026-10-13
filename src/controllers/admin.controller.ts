@@ -3,6 +3,11 @@ import prisma from '../utils/prisma';
 import bcrypt from 'bcryptjs';
 import odoo from '../services/odoo/odoo.service';
 import { sumGrandTotal } from '../utils/vat';
+import { AuthRequest } from '../types';
+import { ALL_ROLES, isValidRole } from '../constants/roles';
+
+const MIN_PASSWORD_LENGTH = 8;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // ─── GET /api/v1/admin/stats ──────────────────────────────────────────────────
 export const getStats = async (_req: Request, res: Response): Promise<void> => {
@@ -532,11 +537,28 @@ export const getUsers = async (_req: Request, res: Response): Promise<void> => {
 };
 
 // POST /api/v1/admin/users
-export const createUser = async (req: Request, res: Response): Promise<void> => {
+export const createUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { name, email, phone, password, role } = req.body;
     if (!name || !email || !password) {
       res.status(400).json({ success: false, error: 'name, email, and password are required' });
+      return;
+    }
+    if (!EMAIL_RE.test(String(email).trim())) {
+      res.status(400).json({ success: false, error: 'A valid email is required' });
+      return;
+    }
+    if (String(password).length < MIN_PASSWORD_LENGTH) {
+      res.status(400).json({ success: false, error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters` });
+      return;
+    }
+    if (role !== undefined && !isValidRole(role)) {
+      res.status(400).json({ success: false, error: `Invalid role. Allowed roles: ${ALL_ROLES.join(', ')}` });
+      return;
+    }
+    // Only an ADMIN may create another ADMIN (prevents a MANAGER escalating privileges)
+    if (role === 'ADMIN' && req.user!.role !== 'ADMIN') {
+      res.status(403).json({ success: false, error: 'Only an Admin can create Admin accounts' });
       return;
     }
     const passwordHash = await bcrypt.hash(password, 10);
@@ -555,7 +577,7 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
     }
 
     const user = await prisma.user.create({
-      data: { name, email, phone: phone || null, passwordHash, role: role || 'DRIVER', odooEmployeeId },
+      data: { name: String(name).trim(), email: String(email).trim(), phone: phone || null, passwordHash, role: role || 'DRIVER', odooEmployeeId },
       select: { id: true, name: true, email: true, phone: true, role: true, isActive: true, createdAt: true, odooEmployeeId: true },
     });
 
@@ -571,13 +593,53 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
 };
 
 // PATCH /api/v1/admin/users/:id
-export const updateUser = async (req: Request, res: Response): Promise<void> => {
+export const updateUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
     const { name, email, phone, role, isActive, password } = req.body;
+    const actor = req.user!;
+
+    if (role !== undefined && !isValidRole(role)) {
+      res.status(400).json({ success: false, error: `Invalid role. Allowed roles: ${ALL_ROLES.join(', ')}` });
+      return;
+    }
+    if (isActive !== undefined && typeof isActive !== 'boolean') {
+      res.status(400).json({ success: false, error: 'isActive must be true or false' });
+      return;
+    }
+    if (email !== undefined && !EMAIL_RE.test(String(email).trim())) {
+      res.status(400).json({ success: false, error: 'A valid email is required' });
+      return;
+    }
+    if (password && String(password).length < MIN_PASSWORD_LENGTH) {
+      res.status(400).json({ success: false, error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters` });
+      return;
+    }
+
+    // Guard against accidental self lock-out (demoting or deactivating your own account)
+    if (id === actor.userId) {
+      if ((role !== undefined && role !== actor.role) || isActive === false) {
+        res.status(400).json({ success: false, error: 'You cannot change your own role or deactivate your own account' });
+        return;
+      }
+    }
+
+    // Only an ADMIN may grant the ADMIN role or modify an existing ADMIN account
+    if (actor.role !== 'ADMIN') {
+      const target = await prisma.user.findUnique({ where: { id }, select: { role: true } });
+      if (!target) {
+        res.status(404).json({ success: false, error: 'User not found' });
+        return;
+      }
+      if (target.role === 'ADMIN' || role === 'ADMIN') {
+        res.status(403).json({ success: false, error: 'Only an Admin can modify Admin accounts or grant the Admin role' });
+        return;
+      }
+    }
+
     const data: Record<string, unknown> = {};
     if (name !== undefined) data.name = name;
-    if (email !== undefined) data.email = email;
+    if (email !== undefined) data.email = String(email).trim();
     if (phone !== undefined) data.phone = phone || null;
     if (role !== undefined) data.role = role;
     if (isActive !== undefined) data.isActive = isActive;

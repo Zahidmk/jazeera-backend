@@ -18,6 +18,7 @@ import adminRoutes from './routes/admin.routes';
 import odooRoutes from './routes/odoo.routes';
 import salesmanRoutes from './routes/salesman.routes';
 import storekeeperRoutes from './routes/storekeeper.routes';
+import merchandiserRoutes from './routes/merchandiser.routes';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -35,7 +36,7 @@ app.use(express.urlencoded({ extended: true }));
 // ─── Rate Limiting ────────────────────────────────────────────────────────────
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 min
-  max: 20,
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX) || 20, // override only for automated test runs
   message: { success: false, error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -75,6 +76,7 @@ app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/odoo', odooRoutes);
 app.use('/api/v1/salesman', salesmanRoutes);
 app.use('/api/v1/storekeeper', storekeeperRoutes);
+app.use('/api/v1/merchandiser', merchandiserRoutes);
 
 // ─── 404 ─────────────────────────────────────────────────────────────────────
 app.use((_req, res) => {

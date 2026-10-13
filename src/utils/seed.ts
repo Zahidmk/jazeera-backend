@@ -72,6 +72,19 @@ async function main() {
   });
   console.log(`✅ Salesman created: ${salesman.email}`);
 
+  const merchandiser = await prisma.user.upsert({
+    where: { email: 'merchandiser@jazeera.com' },
+    update: {},
+    create: {
+      name: 'Sami Al-Harbi',
+      email: 'merchandiser@jazeera.com',
+      phone: '+971505556666',
+      passwordHash,
+      role: 'MERCHANDISER',
+    },
+  });
+  console.log(`✅ Merchandiser created: ${merchandiser.email}`);
+
   // ─── Create van and assign to driver ─────────────────────────────────────
   const van = await prisma.van.upsert({
     where: { plateNumber: 'DXB-A-12345' },
@@ -218,6 +231,7 @@ async function main() {
   console.log('   Driver      → email: driver@jazeera.com      | password: password123');
   console.log('   StoreKeeper → email: storekeeper@jazeera.com | password: password123');
   console.log('   Salesman    → email: salesman@jazeera.com    | password: password123');
+  console.log('   Merchandiser→ email: merchandiser@jazeera.com | password: password123');
   console.log('   Manager     → email: manager@jazeera.com     | password: password123');
   console.log('   Admin       → email: admin@jazeera.com       | password: password123');
   console.log('─────────────────────────────────────────');
