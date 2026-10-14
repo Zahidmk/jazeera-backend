@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Jazeera Merchandiser API (Phase 2)",
-    "description": "Merchandiser mobile app + admin management endpoints. Run \"Merchandiser Login\" (and \"Admin Login\") first — tokens are saved to collection variables. Check-in / check-out need a selfie file chosen in the form-data body. See MERCHANDISER_API_GUIDE.md.",
+    "description": "Base URL defaults to production (http://147.93.96.94:5000) — change the base_url collection variable for another environment. The Admin folders are for the dashboard and are not needed by the mobile app. Merchandiser mobile app + admin management endpoints. Run \"Merchandiser Login\" (and \"Admin Login\") first — tokens are saved to collection variables. Check-in / check-out need a selfie file chosen in the form-data body. See MERCHANDISER_API_GUIDE.md.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -17,7 +17,7 @@
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:3000"
+      "value": "http://147.93.96.94:5000"
     },
     {
       "key": "merch_token",
@@ -67,7 +67,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"merchandiser@jazeera.com\",\n  \"password\": \"password123\"\n}",
+              "raw": "{\n  \"email\": \"YOUR_MERCHANDISER_EMAIL\",\n  \"password\": \"YOUR_PASSWORD\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -116,7 +116,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"admin@jazeera.com\",\n  \"password\": \"password123\"\n}",
+              "raw": "{\n  \"email\": \"YOUR_ADMIN_EMAIL\",\n  \"password\": \"YOUR_PASSWORD\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
