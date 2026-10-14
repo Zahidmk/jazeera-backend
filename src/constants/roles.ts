@@ -13,4 +13,4 @@ export const BACKOFFICE_ROLES = ['ADMIN', 'MANAGER'];
 export const MERCHANDISER_APP_ROLES = ['MERCHANDISER'];
 
 /** Roles allowed on /driver/* and /driver/sales/* (van-sales workflow). Admin/Manager kept for support & testing. */
-export const DRIVER_APP_ROLES = ['DRIVER', 'RELAY_REP', 'ADMIN', 'MANAGER'];
+export const DRIVER_APP_ROLES = ['DRIVER', 'ADMIN', 'MANAGER'];

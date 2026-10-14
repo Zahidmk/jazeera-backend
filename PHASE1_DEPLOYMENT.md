@@ -5,7 +5,7 @@
 - `authenticate` now loads the user from the DB on every request. Role changes and deactivation apply immediately (no waiting for the 7-day JWT to expire).
 - `/api/v1/admin/*` → ADMIN / MANAGER only.
 - `/api/v1/sync/*` and `/api/v1/odoo/*` → require login, ADMIN / MANAGER only. `POST /sync/webhook` stays JWT-free but is protected by `X-Odoo-Webhook-Secret`; it now **fails closed** (503) if `ODOO_WEBHOOK_SECRET` is unset, and uses a constant-time comparison.
-- `/api/v1/driver/*` and `/api/v1/driver/sales/*` → DRIVER, RELAY_REP, ADMIN, MANAGER.
+- `/api/v1/driver/*` and `/api/v1/driver/sales/*` → DRIVER, ADMIN, MANAGER.
 - New role `MERCHANDISER` (enum + migration). It can log in and call `/auth/me`; it has no other access yet (Phase 2+).
 - User management: role validated against the enum, email/password (min 8) validated, only an ADMIN can create/modify ADMIN accounts or grant ADMIN, nobody can demote/deactivate their own account.
 - Login/forgot-password lookup fixed: `OR: [{email: undefined}, ...]` matched every row, so an unknown email could resolve to an arbitrary user.
