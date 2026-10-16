@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import prisma from '../utils/prisma';
 import { AuthRequest } from '../types';
 import odoo from '../services/odoo/odoo.service';
+import pricing from '../services/pricing.service';
 
 // Our stored unitPrice/totalAmount is the pre-tax (subtotal) amount — same as
 // the "Subtotal" the driver app shows before adding VAT. The app itself adds
@@ -50,10 +51,12 @@ export const getCart = async (req: AuthRequest, res: Response): Promise<void> =>
 };
 
 // ─── POST /api/v1/driver/sales/cart/items ────────────────────────────────────
+// Pass `customerId` to price the line with that shop's own price (the price it
+// last paid under its pricelist in Odoo) instead of the catalogue price.
 export const addCartItem = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const driverId = req.user!.userId;
-    const { productId, quantity, discount = 0 } = req.body;
+    const { productId, quantity, discount = 0, customerId } = req.body;
 
     if (!productId || !quantity) {
       res.status(400).json({ success: false, error: 'productId and quantity are required' });
@@ -72,10 +75,18 @@ export const addCartItem = async (req: AuthRequest, res: Response): Promise<void
 
     if (!cartStore[driverId]) cartStore[driverId] = [];
 
+    // Customer-specific price when we know who we are selling to, catalogue
+    // price otherwise. Never let a pricing hiccup block adding to the cart.
+    const resolved = customerId ? await pricing.getCustomerPrice(customerId, productId) : null;
+    const unitPrice = resolved?.price ?? product.priceRetail;
+    const priceSource = resolved?.priceSource ?? 'LIST';
+
     const existing = cartStore[driverId].find(i => i.productId === productId);
     if (existing) {
       existing.quantity += quantity;
       existing.discount = discount;
+      existing.unitPrice = unitPrice;
+      existing.priceSource = priceSource;
     } else {
       cartStore[driverId].push({
         id: uuidv4(),
@@ -83,7 +94,9 @@ export const addCartItem = async (req: AuthRequest, res: Response): Promise<void
         name: product.name,
         sku: product.sku,
         unit: product.unit,
-        unitPrice: product.priceRetail,
+        unitPrice,
+        listPrice: product.priceRetail,
+        priceSource,
         quantity,
         discount,
       });
@@ -167,6 +180,10 @@ export const submitSale = async (req: AuthRequest, res: Response): Promise<void>
           sku: product.sku,
           unit: product.unit,
           unitPrice: item.unitPrice ?? product.priceRetail,
+          listPrice: product.priceRetail,
+          // An explicit unitPrice from the app is the driver's own decision and
+          // is never overwritten by the customer pricelist below.
+          priceOverridden: item.unitPrice != null,
           quantity: item.quantity,
           discount: item.discount ?? 0,
         });
@@ -232,6 +249,30 @@ export const submitSale = async (req: AuthRequest, res: Response): Promise<void>
     if (!van) {
       res.status(400).json({ success: false, error: 'No van assigned to this driver' });
       return;
+    }
+
+    // ── Apply the shop's own pricelist ──────────────────────────────────────
+    // The customer is only known at submit time (the cart may have been built
+    // before one was picked), so re-price every line the driver did not price
+    // by hand. Walk-in customers have no Odoo partner, so this is a no-op for
+    // them and the catalogue price stands.
+    const repriceable = cart.filter((i) => !i.priceOverridden);
+    if (repriceable.length > 0) {
+      try {
+        const customerPrices = await pricing.getCustomerPrices(
+          resolvedCustomerId,
+          repriceable.map((i) => i.productId)
+        );
+        for (const item of repriceable) {
+          const resolved = customerPrices.get(item.productId);
+          if (resolved?.priceSource === 'CUSTOMER_LAST_SALE') {
+            item.unitPrice = resolved.price;
+            item.priceSource = 'CUSTOMER_LAST_SALE';
+          }
+        }
+      } catch (err: any) {
+        console.warn('⚠️  Customer pricing unavailable — selling at list price:', err?.message);
+      }
     }
 
     const totalAmount = cart.reduce((sum, item) => {
@@ -404,6 +445,11 @@ async function pushSaleToOdoo(
 
   const odooSaleId = await odoo.createSaleOrder(partnerOdooId, validLines, employeeId);
   await prisma.cashSale.update({ where: { id: saleId }, data: { odooSaleId } });
+
+  // This sale is now the customer's most recent one, so the cached
+  // "last sale price" for these products is stale.
+  pricing.invalidateCustomerPriceCache(partnerOdooId);
+
   console.log(`✅ Odoo: Cash sale ${saleId} → SO created with odooSaleId: ${odooSaleId}`);
 
   // Capture the real tax split Odoo computed, so the dashboard shows Odoo's

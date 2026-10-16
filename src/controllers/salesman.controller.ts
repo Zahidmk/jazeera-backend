@@ -2,6 +2,7 @@ import { Response } from 'express';
 import prisma from '../utils/prisma';
 import { AuthRequest } from '../types';
 import odoo from '../services/odoo/odoo.service';
+import pricing from '../services/pricing.service';
 
 /**
  * Ensures that a customer exists in the Customer table.
@@ -634,9 +635,11 @@ export const getCustomers = async (req: AuthRequest, res: Response): Promise<voi
 };
 
 // ─── GET /api/v1/salesman/products ───────────────────────────────────────────
+// Pass ?customerId=<uuid> while quoting for a shop: every row then carries that
+// shop's own price (customerPrice) alongside the catalogue price.
 export const getProducts = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { q, search, category, page = '1', limit = '20' } = req.query;
+    const { q, search, category, customerId, page = '1', limit = '20' } = req.query;
     const searchQuery = String(q || search || '').trim();
 
     const pageNum = parseInt(page as string);
@@ -681,14 +684,17 @@ export const getProducts = async (req: AuthRequest, res: Response): Promise<void
       prisma.product.count({ where }),
     ]);
 
+    const data = await pricing.attachCustomerPrices(customerId as string | undefined, products);
+
     res.json({
       success: true,
-      data: products,
+      data,
       meta: {
         total,
         page: pageNum,
         limit: limitNum,
         totalPages: Math.ceil(total / limitNum),
+        customerId: (customerId as string) || null,
       },
     });
   } catch (err) {

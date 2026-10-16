@@ -26,6 +26,8 @@ export const addCartItemRules = [
   body('productId').isUUID().withMessage('Valid productId (UUID) is required'),
   body('quantity').isInt({ min: 1 }).withMessage('Quantity must be at least 1'),
   body('discount').optional().isFloat({ min: 0, max: 100 }).withMessage('Discount must be 0-100'),
+  // Optional: prices the line with this shop's own pricelist instead of the catalogue price
+  body('customerId').optional().isUUID().withMessage('customerId must be a valid UUID'),
 ];
 
 export const submitSaleRules = [
@@ -115,3 +117,28 @@ export const assignVanLoadRules = [
 ];
 
 
+
+// ─── Customer-specific pricing ───────────────────────────────────────────────
+// customerId may be a local customer UUID or a raw Odoo partner id (numeric),
+// since the dashboard works with Odoo ids while the mobile apps use UUIDs.
+const isCustomerRef = (value: any) =>
+  typeof value === 'number'
+    ? Number.isInteger(value) && value > 0
+    : typeof value === 'string' &&
+      (/^\d+$/.test(value) ||
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value));
+
+export const customerPriceRules = [
+  param('productId').isUUID().withMessage('productId must be a valid UUID'),
+  query('customerId')
+    .custom(isCustomerRef)
+    .withMessage('customerId must be a customer UUID or an Odoo partner id'),
+];
+
+export const customerPricesBatchRules = [
+  body('customerId')
+    .custom(isCustomerRef)
+    .withMessage('customerId must be a customer UUID or an Odoo partner id'),
+  body('productIds').isArray({ min: 1, max: 200 }).withMessage('productIds must be an array of 1-200 ids'),
+  body('productIds.*').isUUID().withMessage('Each productId must be a valid UUID'),
+];

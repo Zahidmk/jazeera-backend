@@ -27,6 +27,10 @@ const objectClient = createClient('/xmlrpc/2/object');
 
 // ─── Cache UID ──────────────────────────────────────────
 let cachedUid: number | null = null;
+// In-flight login, shared by concurrent callers. Without this, a burst of
+// parallel calls (e.g. the customer-price lookup pool) each pays for its own
+// authentication round-trip before the first one populates cachedUid.
+let pendingAuth: Promise<number> | null = null;
 
 // ─── Helper: promisify xmlrpc calls ─────────────────────
 function rpcCall(client: any, method: string, params: any[]): Promise<any> {
@@ -41,23 +45,34 @@ function rpcCall(client: any, method: string, params: any[]): Promise<any> {
 // ─── Authenticate ───────────────────────────────────────
 export async function authenticate(): Promise<number> {
   if (cachedUid) return cachedUid;
+  if (pendingAuth) return pendingAuth;
 
   console.log(`🔌 Connecting to Odoo: ${ODOO_URL} (DB: ${ODOO_DB}, User: ${ODOO_USERNAME})`);
 
-  const uid = await rpcCall(commonClient, 'authenticate', [
-    ODOO_DB,
-    ODOO_USERNAME,
-    ODOO_PASSWORD,
-    {},
-  ]);
+  pendingAuth = (async () => {
+    const uid = await rpcCall(commonClient, 'authenticate', [
+      ODOO_DB,
+      ODOO_USERNAME,
+      ODOO_PASSWORD,
+      {},
+    ]);
 
-  if (!uid || uid === false) {
-    throw new Error('Odoo authentication failed. Check URL, DB, username, and API key.');
+    if (!uid || uid === false) {
+      throw new Error('Odoo authentication failed. Check URL, DB, username, and API key.');
+    }
+
+    cachedUid = uid as number;
+    console.log(`✅ Odoo authenticated — UID: ${uid}`);
+    return uid as number;
+  })();
+
+  try {
+    return await pendingAuth;
+  } finally {
+    // Cleared either way: on success cachedUid now short-circuits, on failure
+    // the next caller should be free to retry.
+    pendingAuth = null;
   }
-
-  cachedUid = uid as number;
-  console.log(`✅ Odoo authenticated — UID: ${uid}`);
-  return uid;
 }
 
 // ─── Generic Execute (execute_kw) ───────────────────────
@@ -623,6 +638,54 @@ export async function fetchOrdersModifiedSince(since: Date): Promise<any[]> {
   );
 }
 
+// ─── Customer-specific pricing (Odoo custom service) ─────────────────────────
+// Odoo exposes a custom model `vansales.integration.service` with the method
+// `get_last_sale_price(customer_id, product_id)`. It returns the price this
+// particular customer last paid for that product — i.e. the price agreed under
+// that shop's own pricelist — or `false` when the customer never bought it.
+//
+// Verified return shape against the staging DB:
+//   { product_id: 23915, last_sale_price: 1, sale_date: "2026-10-11 14:35:48", currency_id: 150 }
+// It is a singleton call: exactly ONE product id per call (a list raises
+// "Expected singleton"), and each round-trip costs ~290 ms — callers should go
+// through pricing.service.ts, which batches with a concurrency pool and caches.
+
+export interface OdooLastSalePrice {
+  productId: number;
+  price: number;
+  saleDate: string | null;
+  currencyId: number | null;
+}
+
+/**
+ * Last price a given Odoo customer paid for a given Odoo product.
+ * Returns null when the customer has no purchase history for that product.
+ */
+export async function getLastSalePrice(
+  customerOdooId: number,
+  productOdooId: number
+): Promise<OdooLastSalePrice | null> {
+  const result = await execute(
+    'vansales.integration.service',
+    'get_last_sale_price',
+    [customerOdooId, productOdooId]
+  );
+
+  // No history for this customer/product pair → Odoo returns false
+  if (!result || typeof result !== 'object') return null;
+
+  const raw = (result as any).last_sale_price;
+  const price = typeof raw === 'number' ? raw : parseFloat(raw);
+  if (!Number.isFinite(price)) return null;
+
+  return {
+    productId: Number((result as any).product_id ?? productOdooId),
+    price,
+    saleDate: (result as any).sale_date || null,
+    currencyId: (result as any).currency_id != null ? Number((result as any).currency_id) : null,
+  };
+}
+
 export default {
   authenticate,
   version,
@@ -646,6 +709,7 @@ export default {
   createEmployee,
   updateSaleOrderStatus,
   createInventoryAdjustment,
+  getLastSalePrice,
   // Van warehouse integration
   findOrCreateVanLocation,
   getWarehouseStockLocationId,

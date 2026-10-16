@@ -255,6 +255,7 @@ Retrieves a list of active products with optional search, category filter, and p
 * **Query Parameters (Optional)**:
   * `q` / `search`: Query string to filter by product name, Arabic name, SKU, or barcode (case-insensitive).
   * `category`: Filter by product category name (e.g. `Water`).
+  * `customerId`: Customer UUID. **Pass this whenever you are quoting for a shop** — each row then also carries `customerPrice`, the price that shop last paid under its own Odoo pricelist. See [CUSTOMER_PRICING.md](./CUSTOMER_PRICING.md).
   * `page`: Page number (default: `1`).
   * `limit`: Number of items per page (default: `20`).
 * **Success Response (200 OK)**:
@@ -274,15 +275,21 @@ Retrieves a list of active products with optional search, category filter, and p
         "priceWhole": 1.00,
         "barcode": "6291011121314",
         "imageUrl": "data:image/png;base64,...",
-        "isActive": true
+        "isActive": true,
+
+        "customerPrice": 1.25,
+        "priceSource": "CUSTOMER_LAST_SALE",
+        "lastSaleDate": "2026-10-11 14:35:48"
       }
     ],
     "meta": {
       "total": 1,
       "page": 1,
       "limit": 20,
-      "totalPages": 1
+      "totalPages": 1,
+      "customerId": "a1b2c3d4-..."
     }
   }
   ```
+* **Note**: `customerPrice`, `priceSource` and `lastSaleDate` appear **only when `customerId` was passed**. Show `customerPrice` as the selling price; `priceRetail` stays the catalogue price. `priceSource` is `CUSTOMER_LAST_SALE` when the price came from that shop's history, or `LIST` when it fell back to the catalogue price.
 

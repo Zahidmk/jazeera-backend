@@ -2,6 +2,7 @@ import { Response } from 'express';
 import prisma from '../utils/prisma';
 import { AuthRequest } from '../types';
 import odoo from '../services/odoo/odoo.service';
+import pricing from '../services/pricing.service';
 
 // ─── GET /api/v1/driver/home ─────────────────────────────────────────────────
 export const getHome = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -502,9 +503,12 @@ async function pushVanLoadToOdoo(
 }
 
 // ─── GET /api/v1/driver/van/inventory ────────────────────────────────────────
+// Pass ?customerId=<uuid> when the driver is standing at a shop: each item then
+// also carries customerPrice — what that shop last paid under its own pricelist.
 export const getVanInventory = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const driverId = req.user!.userId;
+    const { customerId } = req.query;
 
     const van = await prisma.van.findFirst({ where: { driverId } });
     if (!van) {
@@ -522,15 +526,23 @@ export const getVanInventory = async (req: AuthRequest, res: Response): Promise<
       orderBy: { product: { name: 'asc' } },
     });
 
+    // NOTE: the product spread overwrites `id`, so each row is keyed by the
+    // product id — which is exactly what the pricing lookup needs.
+    const items = await pricing.attachCustomerPrices(
+      customerId as string | undefined,
+      inventory.map(i => ({
+        id: i.id,
+        quantity: i.quantity,
+        ...i.product,
+      }))
+    );
+
     res.json({
       success: true,
       data: {
         van: { id: van.id, plateNumber: van.plateNumber },
-        items: inventory.map(i => ({
-          id: i.id,
-          quantity: i.quantity,
-          ...i.product,
-        })),
+        customerId: (customerId as string) || null,
+        items,
         totalItems: inventory.length,
         totalUnits: inventory.reduce((sum, i) => sum + i.quantity, 0),
       },
