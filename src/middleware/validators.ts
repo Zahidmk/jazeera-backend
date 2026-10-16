@@ -135,10 +135,24 @@ export const customerPriceRules = [
     .withMessage('customerId must be a customer UUID or an Odoo partner id'),
 ];
 
+// Accepts local UUIDs (mobile apps) or Odoo product ids (dashboard) — one of the two.
 export const customerPricesBatchRules = [
   body('customerId')
     .custom(isCustomerRef)
     .withMessage('customerId must be a customer UUID or an Odoo partner id'),
-  body('productIds').isArray({ min: 1, max: 200 }).withMessage('productIds must be an array of 1-200 ids'),
-  body('productIds.*').isUUID().withMessage('Each productId must be a valid UUID'),
+  body('productIds').optional().isArray({ min: 1, max: 200 }).withMessage('productIds must be an array of 1-200 ids'),
+  body('productIds.*').optional().isUUID().withMessage('Each productId must be a valid UUID'),
+  body('productOdooIds')
+    .optional()
+    .isArray({ min: 1, max: 200 })
+    .withMessage('productOdooIds must be an array of 1-200 ids'),
+  body('productOdooIds.*').optional().isInt({ min: 1 }).withMessage('Each productOdooId must be a positive integer'),
+  body().custom((value) => {
+    const hasUuids = Array.isArray(value?.productIds) && value.productIds.length > 0;
+    const hasOdooIds = Array.isArray(value?.productOdooIds) && value.productOdooIds.length > 0;
+    if (!hasUuids && !hasOdooIds) {
+      throw new Error('Provide either productIds (UUIDs) or productOdooIds (Odoo product ids)');
+    }
+    return true;
+  }),
 ];

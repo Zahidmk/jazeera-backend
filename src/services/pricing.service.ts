@@ -36,7 +36,9 @@ export type PriceSource = 'CUSTOMER_LAST_SALE' | 'LIST';
 
 export interface ResolvedPrice {
   /** Local product UUID */
-  productId: string;
+  productId: string
+  /** Odoo product id, so callers working in Odoo ids can key on it */
+  odooId: number | null;
   /** Price to display / charge for this customer */
   price: number;
   /** Catalogue price from the Odoo sync — what we fall back to */
@@ -183,27 +185,20 @@ async function lookupLastSalePrice(
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Resolve the price each of `productIds` should be sold at for `customerId`.
- * Always returns an entry for every product that exists — falling back to the
- * local list price whenever Odoo has no answer.
+ * Resolve prices for products already loaded from the DB. Every product comes
+ * back with a price: the customer's own where Odoo has one, the list price
+ * otherwise. Shared by both public lookups below.
  */
-export async function getCustomerPrices(
+async function resolvePrices(
   customerId: string | number | null | undefined,
-  productIds: string[]
+  products: PriceLookupTarget[]
 ): Promise<Map<string, ResolvedPrice>> {
-  const out = new Map<string, ResolvedPrice>();
-  const uniqueIds = [...new Set(productIds)].filter(Boolean);
-  if (uniqueIds.length === 0) return out;
-
-  const products = await prisma.product.findMany({
-    where: { id: { in: uniqueIds } },
-    select: { id: true, odooId: true, priceRetail: true },
-  });
-
   // Seed every product with its list price, then upgrade the ones Odoo answers for
+  const out = new Map<string, ResolvedPrice>();
   for (const p of products) {
     out.set(p.id, {
       productId: p.id,
+      odooId: p.odooId,
       price: p.priceRetail,
       listPrice: p.priceRetail,
       priceSource: 'LIST',
@@ -216,7 +211,7 @@ export async function getCustomerPrices(
 
   // Only products that exist in Odoo can have a customer price. Cap the fan-out
   // so one oversized page cannot stall on hundreds of RPCs.
-  const inOdoo: PriceLookupTarget[] = products.filter((p: PriceLookupTarget) => p.odooId != null);
+  const inOdoo = products.filter((p) => p.odooId != null);
   const lookupTargets = inOdoo.slice(0, MAX_LOOKUPS);
 
   if (lookupTargets.length < inOdoo.length) {
@@ -230,6 +225,7 @@ export async function getCustomerPrices(
     if (entry?.price != null) {
       out.set(p.id, {
         productId: p.id,
+        odooId: p.odooId,
         price: entry.price,
         listPrice: p.priceRetail,
         priceSource: 'CUSTOMER_LAST_SALE',
@@ -238,6 +234,52 @@ export async function getCustomerPrices(
     }
   });
 
+  return out;
+}
+
+/**
+ * Resolve the price each of `productIds` (local UUIDs) should be sold at for
+ * `customerId`. Always returns an entry for every product that exists —
+ * falling back to the local list price whenever Odoo has no answer.
+ */
+export async function getCustomerPrices(
+  customerId: string | number | null | undefined,
+  productIds: string[]
+): Promise<Map<string, ResolvedPrice>> {
+  const uniqueIds = [...new Set(productIds)].filter(Boolean);
+  if (uniqueIds.length === 0) return new Map();
+
+  const products: PriceLookupTarget[] = await prisma.product.findMany({
+    where: { id: { in: uniqueIds } },
+    select: { id: true, odooId: true, priceRetail: true },
+  });
+
+  return resolvePrices(customerId, products);
+}
+
+/**
+ * Same, but keyed by Odoo product id — for callers that work in Odoo ids
+ * rather than local UUIDs, such as the admin dashboard's stock views.
+ * Products not synced locally are simply absent from the result.
+ */
+export async function getCustomerPricesByOdooIds(
+  customerId: string | number | null | undefined,
+  productOdooIds: number[]
+): Promise<Map<number, ResolvedPrice>> {
+  const uniqueIds = [...new Set(productOdooIds)].filter((id) => Number.isFinite(id));
+  if (uniqueIds.length === 0) return new Map();
+
+  const products: PriceLookupTarget[] = await prisma.product.findMany({
+    where: { odooId: { in: uniqueIds } },
+    select: { id: true, odooId: true, priceRetail: true },
+  });
+
+  const byLocalId = await resolvePrices(customerId, products);
+
+  const out = new Map<number, ResolvedPrice>();
+  for (const resolved of byLocalId.values()) {
+    if (resolved.odooId != null) out.set(resolved.odooId, resolved);
+  }
   return out;
 }
 
@@ -281,6 +323,7 @@ export async function attachCustomerPrices<T extends { id: string }>(
 export default {
   getCustomerPrice,
   getCustomerPrices,
+  getCustomerPricesByOdooIds,
   attachCustomerPrices,
   resolveCustomerOdooId,
   invalidateCustomerPriceCache,

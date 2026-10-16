@@ -58,6 +58,9 @@ before — this is fully backward compatible.
 | `GET /api/v1/salesman/products?customerId=` | Salesman building a quotation |
 | `GET /api/v1/driver/van/inventory?customerId=` | Driver selling from the van at a shop |
 
+The admin dashboard uses the batch endpoint below instead, because its stock
+views come live from Odoo and are keyed by Odoo product id.
+
 Added to each product row:
 
 ```jsonc
@@ -121,15 +124,29 @@ Content-Type: application/json
 {
   "success": true,
   "data": [
-    { "productId": "24589969-...", "price": 1.25, "listPrice": 1.50, "priceSource": "CUSTOMER_LAST_SALE", "lastSaleDate": "2026-10-11 14:35:48" },
-    { "productId": "7b2c1a90-...", "price": 3.00, "listPrice": 3.00, "priceSource": "LIST", "lastSaleDate": null }
+    { "productId": "24589969-...", "odooId": 23915, "price": 1.25, "listPrice": 1.50, "priceSource": "CUSTOMER_LAST_SALE", "lastSaleDate": "2026-10-11 14:35:48" },
+    { "productId": "7b2c1a90-...", "odooId": 21302, "price": 3.00, "listPrice": 3.00, "priceSource": "LIST", "lastSaleDate": null }
   ],
-  "meta": { "customerId": "a1b2c3d4-...", "requested": 2, "resolved": 2 }
+  "meta": { "customerId": "a1b2c3d4-...", "requested": 2, "resolved": 2, "keyedBy": "productId" }
 }
 ```
 
-Up to 200 product ids per batch. A 404 on the single-product endpoint means the
-product id does not exist; a product that exists always resolves to *some* price.
+**By Odoo product id instead.** The mobile apps hold local UUIDs, but the admin
+dashboard works in Odoo ids (its stock views come straight from Odoo). Send
+`productOdooIds` in place of `productIds` and the result is the same shape, so
+you can key on `odooId`:
+
+```json
+{ "customerId": 17120, "productOdooIds": [23915, 21302] }
+```
+
+Products not synced locally are simply absent from the response, so check for a
+missing row rather than assuming a price. `meta.keyedBy` tells you which
+identifier the call was resolved by.
+
+Up to 200 product ids per batch, either kind. A 404 on the single-product
+endpoint means the product id does not exist; a product that exists always
+resolves to *some* price.
 
 ---
 

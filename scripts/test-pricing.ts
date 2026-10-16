@@ -82,6 +82,16 @@ async function main() {
         ` (expected LIST = ${fallback.listPrice}) → ${fallback.priceSource === 'LIST' && fallback.price === fallback.listPrice ? 'OK' : 'MISMATCH'}`
     );
 
+    // Odoo-id path — what the dashboard's stock page uses
+    const odooIds = products.map((p) => p.odooId!).filter(Boolean);
+    const byOdooId = await pricing.getCustomerPricesByOdooIds(customerOdooId, odooIds);
+    const sampleOdooId = odooIds[0];
+    const sample = byOdooId.get(sampleOdooId);
+    console.log(
+      `  by Odoo product id (${sampleOdooId}): ${sample?.price} [${sample?.priceSource}]` +
+        ` → ${byOdooId.size === odooIds.length ? 'OK' : `MISMATCH (${byOdooId.size}/${odooIds.length} resolved)`}`
+    );
+
     // Cache invalidation
     pricing.invalidateCustomerPriceCache(customerOdooId);
     const afterInvalidate = Date.now();

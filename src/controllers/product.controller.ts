@@ -81,27 +81,46 @@ export const getProductCustomerPrice = async (req: Request, res: Response): Prom
 };
 
 // ─── POST /api/v1/products/prices ────────────────────────────────────────────
-// Batch variant — body: { customerId, productIds: [...] }. Use this when the
-// app already has a cart/product list and needs all prices in one round-trip.
+// Batch variant — body: { customerId, productIds } or { customerId, productOdooIds }.
+// Use this when the caller already has a cart/product list and needs all prices
+// in one round-trip. Mobile apps hold local UUIDs; the dashboard holds Odoo ids,
+// so either identifier is accepted and every row carries both back.
 export const getProductCustomerPrices = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { customerId, productIds } = req.body;
+    const { customerId, productIds, productOdooIds } = req.body;
 
     if (!customerId) {
       res.status(400).json({ success: false, error: 'customerId is required' });
       return;
     }
-    if (!Array.isArray(productIds) || productIds.length === 0) {
-      res.status(400).json({ success: false, error: 'productIds must be a non-empty array' });
+
+    const hasUuids = Array.isArray(productIds) && productIds.length > 0;
+    const hasOdooIds = Array.isArray(productOdooIds) && productOdooIds.length > 0;
+
+    if (!hasUuids && !hasOdooIds) {
+      res.status(400).json({
+        success: false,
+        error: 'Provide a non-empty productIds (UUIDs) or productOdooIds (Odoo product ids) array',
+      });
       return;
     }
 
-    const prices = await pricing.getCustomerPrices(customerId, productIds);
+    const prices = hasUuids
+      ? await pricing.getCustomerPrices(customerId, productIds)
+      : await pricing.getCustomerPricesByOdooIds(
+          customerId,
+          productOdooIds.map((id: any) => Number(id))
+        );
 
     res.json({
       success: true,
       data: [...prices.values()],
-      meta: { customerId, requested: productIds.length, resolved: prices.size },
+      meta: {
+        customerId,
+        requested: hasUuids ? productIds.length : productOdooIds.length,
+        resolved: prices.size,
+        keyedBy: hasUuids ? 'productId' : 'odooId',
+      },
     });
   } catch (err) {
     console.error('Get Customer Prices Error:', err);
