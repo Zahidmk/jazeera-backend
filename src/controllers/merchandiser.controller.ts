@@ -68,15 +68,17 @@ export const serializeAttendance = (a: any, base = '/api/v1/merchandiser') => ({
  * Validates the multipart check-in/out form. On any problem it removes the uploaded file, answers 400 and returns null.
  * The biometric prompt itself runs on the phone (the server cannot verify a fingerprint) — the app must report the
  * result in `biometricVerified`, and the call is rejected unless it is true.
+ *
+ * The selfie is required at check-in only; at check-out it is optional (a supplied one is still stored).
  */
-function parseAttendanceForm(req: AuthRequest, res: Response) {
+function parseAttendanceForm(req: AuthRequest, res: Response, opts: { selfieRequired: boolean }) {
   const reject = (msg: string) => {
     removeUploaded(req.file?.path);
     fail(res, 400, msg);
     return null;
   };
   const b = req.body || {};
-  if (!req.file) return reject('A selfie image is required (multipart field "selfie")');
+  if (opts.selfieRequired && !req.file) return reject('A selfie image is required (multipart field "selfie")');
   if (!truthy(b.biometricVerified)) return reject('Biometric verification is required (biometricVerified must be true)');
   const pos = parseLatLng(b.latitude, b.longitude);
   if (!pos) return reject('Valid GPS coordinates are required (latitude, longitude)');
@@ -149,7 +151,7 @@ export const getAttendanceStatus = async (req: AuthRequest, res: Response): Prom
 
 // POST /api/v1/merchandiser/attendance/check-in   (multipart/form-data)
 export const checkIn = async (req: AuthRequest, res: Response): Promise<void> => {
-  const input = parseAttendanceForm(req, res);
+  const input = parseAttendanceForm(req, res, { selfieRequired: true });
   if (!input) return;
   const userId = req.user!.userId;
   const selfiePath = req.file!.path;
@@ -188,10 +190,10 @@ export const checkIn = async (req: AuthRequest, res: Response): Promise<void> =>
 
 // POST /api/v1/merchandiser/attendance/check-out  (multipart/form-data)
 export const checkOut = async (req: AuthRequest, res: Response): Promise<void> => {
-  const input = parseAttendanceForm(req, res);
+  const input = parseAttendanceForm(req, res, { selfieRequired: false });
   if (!input) return;
   const userId = req.user!.userId;
-  const selfiePath = req.file!.path;
+  const selfiePath = req.file?.path;
   try {
     const open = await prisma.attendance.findUnique({ where: { openKey: userId } });
     if (!open) {
@@ -217,7 +219,7 @@ export const checkOut = async (req: AuthRequest, res: Response): Promise<void> =
         checkOutLat: input.pos.lat,
         checkOutLng: input.pos.lng,
         checkOutAccuracy: input.accuracy,
-        checkOutSelfie: toStoredPath(selfiePath),
+        checkOutSelfie: selfiePath ? toStoredPath(selfiePath) : null,
         checkOutDeviceId: input.deviceId,
         checkOutBiometric: true,
         checkOutBiometricMethod: input.method,

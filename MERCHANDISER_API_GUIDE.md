@@ -140,9 +140,11 @@ When not checked in: `isCheckedIn: false, attendance: null, activeVisit: null, d
 ```
 Errors: `400` validation · `403 DEVICE_NOT_APPROVED` · `409 ALREADY_CHECKED_IN`.
 
-### `POST /api/v1/merchandiser/attendance/check-out`  ·  same fields as check-in
-`200` → the same attendance object with `isOpen: false`, `checkOutAt`, `checkOutLat/Lng`, `checkOutSelfieUrl` and
-`durationMinutes` filled in.
+### `POST /api/v1/merchandiser/attendance/check-out`  ·  same fields as check-in, **but `selfie` is optional**
+The app does not collect a selfie at check-out — GPS, `deviceId` and the fingerprint/face result (`biometricVerified=true`) are still
+required. A selfie sent anyway is stored as before.
+`200` → the same attendance object with `isOpen: false`, `checkOutAt`, `checkOutLat/Lng`, `checkOutSelfieUrl` (`null` when no
+selfie was sent) and `durationMinutes` filled in.
 Errors: `409 NOT_CHECKED_IN` · `409 VISIT_IN_PROGRESS` (end the open visit first) · `403 DEVICE_NOT_APPROVED` · `400`.
 
 ### `GET /api/v1/merchandiser/attendance?from=2026-10-01&to=2026-10-31&page=1&limit=30`
