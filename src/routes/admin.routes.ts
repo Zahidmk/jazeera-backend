@@ -35,9 +35,6 @@ import {
   updateAttendance,
   getDevices,
   updateDevice,
-  getShops,
-  getShopDetail,
-  updateShop,
   getShopVisits,
   getShopVisitById,
   getFeedback,
@@ -114,9 +111,6 @@ router.get('/attendance/:id/selfie', getAttendanceSelfie);
 router.patch('/attendance/:id', updateAttendance);
 router.get('/devices', getDevices);
 router.patch('/devices/:id', updateDevice);
-router.get('/shops', getShops);
-router.get('/shops/:id', getShopDetail);
-router.patch('/shops/:id', updateShop);
 router.get('/shop-visits', getShopVisits);
 router.get('/shop-visits/:id', getShopVisitById);
 router.get('/feedback', getFeedback);

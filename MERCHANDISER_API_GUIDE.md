@@ -4,7 +4,7 @@ API for the **Merchandiser** user type in the Jazeera app. The Driver, Storekeep
 backend and the same login; this document covers only what is new for Merchandisers. All examples below are real responses
 from the running API.
 
-**Contents:** [1. Basics](#1-basics) · [2. Login](#2-login) · [3. App flow](#3-app-flow) · [4. Attendance](#4-attendance) · [5. Shops](#5-shops-map-search-registration) · [6. Visits & feedback](#6-visits--feedback) · [7. Errors](#7-errors-and-what-the-app-should-do) · [8. Flutter notes](#8-flutter-implementation-notes) · [9. Testing](#9-testing)
+**Contents:** [1. Basics](#1-basics) · [2. Login](#2-login) · [3. App flow](#3-app-flow) · [4. Attendance](#4-attendance) · [5. Shops](#5-shops-map-search) · [6. Visits & feedback](#6-visits--feedback) · [7. Errors](#7-errors-and-what-the-app-should-do) · [8. Flutter notes](#8-flutter-implementation-notes) · [9. Testing](#9-testing)
 
 ---
 
@@ -75,7 +75,6 @@ Login ─▶ GET /attendance/status ─┬─ not checked in ─▶ Check-in ─
                                  └─ checked in ──────────────────┤
                                                                  ▼
         ┌──────────── Shop map / search (nearby, search) ◀───────┤
-        │  Add new shop (POST /shops)                            │
         ▼                                                        │
    Select shop ─▶ Start visit ─▶ Feedback (0..n) ─▶ End visit ───┘ (repeat per shop)
                                                                  │
@@ -92,7 +91,7 @@ Rules the app should reflect in the UI:
 
 ### How biometric & device verification work — please read
 * **The fingerprint / face prompt runs on the phone** (`local_auth`). The server cannot verify a biometric. Show the prompt **before** every check-in and check-out; call the API **only if it succeeds** and send `biometricVerified=true`. Requests without it are rejected.
-* **Device binding.** Every attendance call carries a stable `deviceId`. A user's **first** phone is trusted automatically. Any other phone gets `403 DEVICE_NOT_APPROVED` until an admin approves it in the dashboard. Show a clear message ("This phone must be approved by your supervisor").
+* **Device tracking.** Every attendance call carries a stable `deviceId`. There is **no device-approval step**: every phone is accepted, and the server only records which phones a user has used (visible to admins). `403 DEVICE_NOT_APPROVED` is no longer returned; an older app that still handles it is harmless.
 * Checking out from a different device than the check-in is allowed but gets flagged for admin review.
 
 ### `GET /api/v1/merchandiser/attendance/status`
@@ -138,14 +137,14 @@ When not checked in: `isCheckedIn: false, attendance: null, activeVisit: null, d
   "durationMinutes": null, "flagged": false, "adminNote": null
 } }
 ```
-Errors: `400` validation · `403 DEVICE_NOT_APPROVED` · `409 ALREADY_CHECKED_IN`.
+Errors: `400` validation · `409 ALREADY_CHECKED_IN`.
 
 ### `POST /api/v1/merchandiser/attendance/check-out`  ·  same fields as check-in, **but `selfie` is optional**
 The app does not collect a selfie at check-out — GPS, `deviceId` and the fingerprint/face result (`biometricVerified=true`) are still
 required. A selfie sent anyway is stored as before.
 `200` → the same attendance object with `isOpen: false`, `checkOutAt`, `checkOutLat/Lng`, `checkOutSelfieUrl` (`null` when no
 selfie was sent) and `durationMinutes` filled in.
-Errors: `409 NOT_CHECKED_IN` · `409 VISIT_IN_PROGRESS` (end the open visit first) · `403 DEVICE_NOT_APPROVED` · `400`.
+Errors: `409 NOT_CHECKED_IN` · `409 VISIT_IN_PROGRESS` (end the open visit first) · `400`.
 
 ### `GET /api/v1/merchandiser/attendance?from=2026-10-01&to=2026-10-31&page=1&limit=30`
 Your own history, newest first. `from`/`to` are optional `YYYY-MM-DD` (Saudi calendar days, inclusive).
@@ -157,7 +156,7 @@ will not work — pass `headers`. Selfies are private; you can only read your ow
 
 ---
 
-## 5. Shops (map, search, registration)
+## 5. Shops (map, search)
 
 A *shop* is a customer record (the same table Odoo customers sync into). Shops without GPS can be searched but won't appear on the map.
 
@@ -198,27 +197,7 @@ Shop object plus your history with it:
 ```
 Unknown id → `404`.
 
-### `POST /api/v1/merchandiser/shops` — register a new shop
-```json
-{
-  "name": "Al Noor Grocery", "phone": "+966513059239", "contactPerson": "Omar", "shopType": "Grocery",
-  "address": "Olaya St", "street": "", "district": "Olaya", "city": "Riyadh", "zip": "", "buildingNumber": "",
-  "notes": "Opens 7am", "latitude": 24.7136, "longitude": 46.6753
-}
-```
-* Required: `name` (≥ 2 chars) and `latitude` + `longitude`. Default them to the phone GPS and let the user **drag the pin on the map**; send the final coordinates.
-* Optional text fields can be omitted or empty. `phone`: 5–20 chars of digits, `+ - ( )` and spaces.
-* `201` → the shop object plus `leadId` (the shop also goes to the admin's lead-approval list and Odoo CRM automatically).
-* Phone already exists → `409`:
-  ```json
-  { "success": false, "error": "A shop with this phone number already exists",
-    "code": "DUPLICATE_PHONE", "existingShop": { "id": "a711d1f0-…", "name": "Al Noor Grocery" } }
-  ```
-  Offer the user "Open existing shop" or "Create anyway"; the latter re-sends the same body with `"confirmDuplicate": true`.
-* Missing/invalid location → `400 "A valid shop location is required (latitude, longitude)"`.
-
-### `PATCH /api/v1/merchandiser/shops/:id` — edit a shop you registered
-Same fields, all optional (send **both** `latitude` and `longitude` to move the pin). Other people's shops → `403`.
+> Merchandisers **cannot create or edit shops** — shops are existing customers (synced from Odoo / created by admins). The app only searches, maps and selects them.
 
 ---
 
@@ -295,13 +274,11 @@ One visit with its feedback (your own only; others → `404`).
 |---|---|---|---|
 | 400 | – | Validation — `error` names the field | Show the message |
 | 401 | – | Missing/expired token, or account deactivated | Clear the session, go to login |
-| 403 | `DEVICE_NOT_APPROVED` | This phone isn't approved yet | Tell the user to ask their supervisor |
-| 403 | – | Wrong role, or editing someone else's shop | Show the message |
+| 403 | – | Wrong role | Show the message |
 | 404 | – | Not found (also for other users' records) | Refresh the list |
 | 409 | `ALREADY_CHECKED_IN` | Already checked in | Refresh status |
 | 409 | `NOT_CHECKED_IN` | Not checked in | Refresh status |
 | 409 | `VISIT_IN_PROGRESS` | Open visit exists (`visitId` included on start; on check-out it means end the visit first) | Resume / end the visit |
-| 409 | `DUPLICATE_PHONE` | Shop phone exists (`existingShop` included) | Offer open existing / create anyway |
 | 429 | – | Rate limited | Back off and retry |
 | 5xx | – | Server problem | Show a generic retry message |
 
@@ -338,11 +315,11 @@ final res = await dio.post('/api/v1/merchandiser/attendance/check-in', data: for
 ```
 
 **Practical tips**
-* **Device id:** use a stable value — e.g. Android `androidId` (via `device_info_plus`) or iOS `identifierForVendor`. A random UUID regenerated on reinstall would count as a *new* phone and need re-approval.
+* **Device id:** use a stable value — e.g. Android `androidId` (via `device_info_plus`) or iOS `identifierForVendor`. A random UUID regenerated on reinstall would show up as a new phone in the admin device list.
 * **Selfie size:** the limit is 5 MB. Compress (e.g. `imageQuality: 70`, max width ~1280) before upload. Use the front camera and force a live capture (no gallery picking) if you want proof the person is present.
 * **GPS:** request location permission and wait for a fix; send `accuracy`. Don't send `0,0`. Consider asking the user to wait/retry when accuracy is poor (> ~50 m).
 * **Showing a selfie:** `Image.network(baseUrl + selfieUrl, headers: {'Authorization': 'Bearer $token'})` (or the equivalent `httpHeaders` in a caching image package).
-* **Map:** call `/shops/nearby` with the phone position; for "add shop", start the pin at the phone position and let the user drag it.
+* **Map:** call `/shops/nearby` with the phone position.
 * **Session:** store the token securely; on any `401` clear it and return to login.
 * **Time display:** timestamps are UTC — format in Saudi time (UTC+3).
 * **No offline mode:** every action needs a connection. Disable the buttons and show a message when offline rather than queueing, so server timestamps stay accurate.
@@ -354,5 +331,5 @@ final res = await dio.post('/api/v1/merchandiser/attendance/check-in', data: for
 
 * Import **`jazeera-merchandiser.postman_collection.json`**. Set the `merch_token` after running *Merchandiser Login*; the *Merchandiser App* folders are the calls in this guide (the *Admin* folders are for the dashboard and aren't needed by the app). Choose a selfie file in the form-data body for check-in/out.
 * You need a Merchandiser test account — ask the project owner to create one in the dashboard (Users & Roles → role *Merchandiser*).
-* To test the "second phone" case, check in from a second `deviceId`; it will return `403 DEVICE_NOT_APPROVED` until it's approved in the dashboard (Attendance → Devices).
+* Any `deviceId` works; a second phone is simply recorded as another device for the user (dashboard: Attendance → Devices).
 * To reset a stuck state (e.g. checked in and forgot to check out), a supervisor force-closes the record in the dashboard (Attendance).
