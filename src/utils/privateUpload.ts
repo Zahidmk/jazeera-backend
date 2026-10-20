@@ -36,11 +36,17 @@ const upload = multer({
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
-    filename: (_req, file, cb) => cb(null, `${uuidv4()}${EXT_BY_MIME[file.mimetype] || '.bin'}`),
+    // Real extension is applied after the content check (the client-declared type is unreliable).
+    filename: (_req, _file, cb) => cb(null, `${uuidv4()}.upload`),
   }),
   limits: { fileSize: MAX_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
-    if (EXT_BY_MIME[file.mimetype]) cb(null, true);
+    // Mobile pickers often send image/jpg, image/pjpeg, application/octet-stream or no type at all,
+    // so accept those here; the magic-byte check below is what actually enforces JPEG/PNG.
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const mimeOk = /^image\/(jpe?g|pjpeg|png|x-png)$/i.test(file.mimetype) || file.mimetype === 'application/octet-stream' || !file.mimetype;
+    const extOk = ['.jpg', '.jpeg', '.png', ''].includes(ext);
+    if (mimeOk && extOk) cb(null, true);
     else cb(new Error('Selfie must be a JPEG or PNG image'));
   },
 }).single('selfie');
@@ -60,6 +66,18 @@ export const selfieUpload = (req: AuthRequest, res: Response, next: NextFunction
         removeUploaded(req.file.path);
         req.file = undefined;
         res.status(400).json({ success: false, error: 'Selfie must be a valid JPEG or PNG image' });
+        return;
+      }
+      const finalPath = req.file.path.replace(/\.upload$/, EXT_BY_MIME[type]);
+      try {
+        fs.renameSync(req.file.path, finalPath);
+        req.file.path = finalPath;
+        req.file.filename = path.basename(finalPath);
+        req.file.mimetype = type;
+      } catch {
+        removeUploaded(req.file.path);
+        req.file = undefined;
+        res.status(500).json({ success: false, error: 'Failed to store selfie' });
         return;
       }
     }
