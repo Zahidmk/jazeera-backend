@@ -11,6 +11,8 @@ import {
   searchShops,
   getNearbyShops,
   getShopById,
+  createShop,
+  updateShop,
   startVisit,
   getCurrentVisit,
   addFeedback,
@@ -35,7 +37,9 @@ router.get('/attendance/:id/selfie', getOwnSelfie);
 // ── Shops (static paths before /:id)
 router.get('/shops/nearby', getNearbyShops);
 router.get('/shops', searchShops);
+router.post('/shops', createShop);
 router.get('/shops/:id', getShopById);
+router.patch('/shops/:id', updateShop);
 
 // ── Visits & feedback (static paths before /:id)
 router.post('/visits/start', startVisit);

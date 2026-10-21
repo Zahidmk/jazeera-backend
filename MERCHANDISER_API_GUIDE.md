@@ -4,7 +4,7 @@ API for the **Merchandiser** user type in the Jazeera app. The Driver, Storekeep
 backend and the same login; this document covers only what is new for Merchandisers. All examples below are real responses
 from the running API.
 
-**Contents:** [1. Basics](#1-basics) · [2. Login](#2-login) · [3. App flow](#3-app-flow) · [4. Attendance](#4-attendance) · [5. Shops](#5-shops-map-search) · [6. Visits & feedback](#6-visits--feedback) · [7. Errors](#7-errors-and-what-the-app-should-do) · [8. Flutter notes](#8-flutter-implementation-notes) · [9. Testing](#9-testing)
+**Contents:** [1. Basics](#1-basics) · [2. Login](#2-login) · [3. App flow](#3-app-flow) · [4. Attendance](#4-attendance) · [5. Shops](#5-shops-map-search-registration) · [6. Visits & feedback](#6-visits--feedback) · [7. Errors](#7-errors-and-what-the-app-should-do) · [8. Flutter notes](#8-flutter-implementation-notes) · [9. Testing](#9-testing)
 
 ---
 
@@ -75,6 +75,7 @@ Login ─▶ GET /attendance/status ─┬─ not checked in ─▶ Check-in ─
                                  └─ checked in ──────────────────┤
                                                                  ▼
         ┌──────────── Shop map / search (nearby, search) ◀───────┤
+        │  Add new shop (POST /shops)                            │
         ▼                                                        │
    Select shop ─▶ Start visit ─▶ Feedback (0..n) ─▶ End visit ───┘ (repeat per shop)
                                                                  │
@@ -156,7 +157,7 @@ will not work — pass `headers`. Selfies are private; you can only read your ow
 
 ---
 
-## 5. Shops (map, search)
+## 5. Shops (map, search, registration)
 
 A *shop* is a customer record (the same table Odoo customers sync into). Shops without GPS can be searched but won't appear on the map.
 
@@ -197,7 +198,27 @@ Shop object plus your history with it:
 ```
 Unknown id → `404`.
 
-> Merchandisers **cannot create or edit shops** — shops are existing customers (synced from Odoo / created by admins). The app only searches, maps and selects them.
+### `POST /api/v1/merchandiser/shops` — register a new shop
+```json
+{
+  "name": "Al Noor Grocery", "phone": "+966513059239", "contactPerson": "Omar", "shopType": "Grocery",
+  "address": "Olaya St", "street": "", "district": "Olaya", "city": "Riyadh", "zip": "", "buildingNumber": "",
+  "notes": "Opens 7am", "latitude": 24.7136, "longitude": 46.6753
+}
+```
+* Required: `name` (≥ 2 chars) and `latitude` + `longitude`. Default them to the phone GPS and let the user **drag the pin on the map**; send the final coordinates.
+* Optional text fields can be omitted or empty. `phone`: 5–20 chars of digits, `+ - ( )` and spaces.
+* `201` → the shop object plus `leadId` (the shop also goes to the admin's lead-approval list and Odoo CRM automatically).
+* Phone already exists → `409`:
+  ```json
+  { "success": false, "error": "A shop with this phone number already exists",
+    "code": "DUPLICATE_PHONE", "existingShop": { "id": "a711d1f0-…", "name": "Al Noor Grocery" } }
+  ```
+  Offer the user "Open existing shop" or "Create anyway"; the latter re-sends the same body with `"confirmDuplicate": true`.
+* Missing/invalid location → `400 "A valid shop location is required (latitude, longitude)"`.
+
+### `PATCH /api/v1/merchandiser/shops/:id` — edit a shop you registered
+Same fields, all optional (send **both** `latitude` and `longitude` to move the pin). Other people's shops → `403`.
 
 ---
 
@@ -274,11 +295,12 @@ One visit with its feedback (your own only; others → `404`).
 |---|---|---|---|
 | 400 | – | Validation — `error` names the field | Show the message |
 | 401 | – | Missing/expired token, or account deactivated | Clear the session, go to login |
-| 403 | – | Wrong role | Show the message |
+| 403 | – | Wrong role, or editing someone else's shop | Show the message |
 | 404 | – | Not found (also for other users' records) | Refresh the list |
 | 409 | `ALREADY_CHECKED_IN` | Already checked in | Refresh status |
 | 409 | `NOT_CHECKED_IN` | Not checked in | Refresh status |
 | 409 | `VISIT_IN_PROGRESS` | Open visit exists (`visitId` included on start; on check-out it means end the visit first) | Resume / end the visit |
+| 409 | `DUPLICATE_PHONE` | Shop phone exists (`existingShop` included) | Offer open existing / create anyway |
 | 429 | – | Rate limited | Back off and retry |
 | 5xx | – | Server problem | Show a generic retry message |
 
@@ -319,7 +341,7 @@ final res = await dio.post('/api/v1/merchandiser/attendance/check-in', data: for
 * **Selfie size:** the limit is 5 MB. Compress (e.g. `imageQuality: 70`, max width ~1280) before upload. Use the front camera and force a live capture (no gallery picking) if you want proof the person is present.
 * **GPS:** request location permission and wait for a fix; send `accuracy`. Don't send `0,0`. Consider asking the user to wait/retry when accuracy is poor (> ~50 m).
 * **Showing a selfie:** `Image.network(baseUrl + selfieUrl, headers: {'Authorization': 'Bearer $token'})` (or the equivalent `httpHeaders` in a caching image package).
-* **Map:** call `/shops/nearby` with the phone position.
+* **Map:** call `/shops/nearby` with the phone position; for "add shop", start the pin at the phone position and let the user drag it.
 * **Session:** store the token securely; on any `401` clear it and return to login.
 * **Time display:** timestamps are UTC — format in Saudi time (UTC+3).
 * **No offline mode:** every action needs a connection. Disable the buttons and show a message when offline rather than queueing, so server timestamps stay accurate.

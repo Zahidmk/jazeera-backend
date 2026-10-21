@@ -1,10 +1,10 @@
 /**
- * Phase 2 regression test — Merchandiser module (attendance, devices, shop search, visits, feedback, admin management).
+ * Phase 2 regression test — Merchandiser module (attendance, devices, shops, visits, feedback, admin management).
  *
  *   npx ts-node scripts/test-phase2.ts          (API must be running; start it with AUTH_RATE_LIMIT_MAX=1000)
  *
  * Creates throwaway users/shops with the prefix "phase2test" and removes everything it created, including selfie
- * files.
+ * files. Registering a shop pushes one CRM lead to Odoo (existing behaviour); that lead is archived afterwards.
  */
 import dotenv from 'dotenv';
 import path from 'path';
@@ -85,7 +85,7 @@ async function main() {
       for (const r of ['DRIVER', 'SALESMAN', 'ADMIN', 'MANAGER']) await expect(`${u.split('?')[0]} as ${r}`, req('GET', u, T[r]), 403);
       await expect(`${u.split('?')[0]} as MERCHANDISER`, req('GET', u, T.M1), 200);
     }
-    for (const u of ['/admin/merchandisers', '/admin/attendance', '/admin/devices', '/admin/shop-visits', '/admin/feedback']) {
+    for (const u of ['/admin/merchandisers', '/admin/attendance', '/admin/devices', '/admin/shops', '/admin/shop-visits', '/admin/feedback']) {
       await expect(`${u} no token`, req('GET', u), 401);
       for (const r of ['M1', 'DRIVER', 'SALESMAN']) await expect(`${u} as ${r}`, req('GET', u, T[r]), 403);
       for (const r of ['ADMIN', 'MANAGER']) await expect(`${u} as ${r}`, req('GET', u, T[r]), 200);
@@ -150,11 +150,20 @@ async function main() {
     // ── E. shops ────────────────────────────────────────────────────────────
     console.log('\nE. Shops');
     const phone = `+9665${Math.floor(10000000 + Math.random() * 89999999)}`;
-    // Merchandisers cannot create shops (no endpoint) — seed one directly.
-    const shopBody = { name: `P2 Test Shop ${tag}`, phone, contactPerson: 'Ali', shopType: 'Grocery', address: 'Olaya St', city: 'Riyadh', district: 'Olaya', notes: 'seeded by test' };
-    await expect('create shop endpoint is gone', req('POST', '/merchandiser/shops', T.M1, { ...shopBody, ...HERE }), 404);
-    await expect('edit shop endpoint is gone', req('PATCH', '/merchandiser/shops/00000000-0000-0000-0000-000000000000', T.M1, { notes: 'x' }), 404);
-    const shop = await prisma.customer.create({ data: { ...shopBody, lat: HERE.latitude, lng: HERE.longitude, createdById: U.M1.id } });
+    const shopBody = { name: `P2 Test Shop ${tag}`, phone, contactPerson: 'Ali', shopType: 'Grocery', address: 'Olaya St', city: 'Riyadh', district: 'Olaya', notes: 'created by test', ...HERE };
+    await expect('shop without location', req('POST', '/merchandiser/shops', T.M1, { ...shopBody, latitude: undefined, longitude: undefined }), 400);
+    await expect('shop with short name', req('POST', '/merchandiser/shops', T.M1, { ...shopBody, name: 'A' }), 400);
+    await expect('shop with bad phone', req('POST', '/merchandiser/shops', T.M1, { ...shopBody, phone: 'abc' }), 400);
+    await expect('driver cannot create shop via merchandiser API', req('POST', '/merchandiser/shops', T.DRIVER, shopBody), 403);
+    const made = await expect('register new shop', req('POST', '/merchandiser/shops', T.M1, shopBody), 201);
+    const shop = made.json?.data;
+    check('shop saved with GPS + details + isMine + leadId', shop?.lat === HERE.latitude && shop?.lng === HERE.longitude && shop?.isMine === true && !!shop?.leadId && shop?.shopType === 'Grocery');
+    const dbShop = await prisma.customer.findUnique({ where: { id: shop.id } });
+    check('stored as Customer (existing system) with createdBy', dbShop?.createdById === U.M1.id && dbShop?.name === shopBody.name);
+    const dbLead = await prisma.lead.findFirst({ where: { customerId: shop.id } });
+    check('Lead created for admin approval (existing pipeline)', dbLead?.driverId === U.M1.id && dbLead?.status === 'PENDING');
+    const dup = await expect('duplicate phone → 409', req('POST', '/merchandiser/shops', T.M1, shopBody), 409);
+    check('duplicate response names the existing shop', dup.json?.existingShop?.id === shop.id && dup.json?.code === 'DUPLICATE_PHONE');
 
     const near = await expect('nearby shops', req('GET', `/merchandiser/shops/nearby?lat=${HERE.latitude}&lng=${HERE.longitude}&radiusKm=1`, T.M1), 200);
     const inNear = near.json.data.find((s: any) => s.id === shop.id);
@@ -172,6 +181,12 @@ async function main() {
     check('detail has contact + visit stats', detail.json.data.contactPerson === 'Ali' && detail.json.data.myVisitCount === 0);
     await expect('unknown shop → 404', req('GET', '/merchandiser/shops/00000000-0000-0000-0000-000000000000', T.M1), 404);
     check('shop list hides createdById', !('createdById' in detail.json.data));
+    await expect('M2 cannot edit M1 shop', req('PATCH', `/merchandiser/shops/${shop.id}`, T.M2, { notes: 'x' }), 403);
+    const pinned = await expect('M1 adjusts location (map pin)', req('PATCH', `/merchandiser/shops/${shop.id}`, T.M1, { latitude: 24.7140, longitude: 46.6760 }), 200);
+    check('location updated', pinned.json.data.lat === 24.714 && pinned.json.data.lng === 46.676);
+    await expect('invalid location edit', req('PATCH', `/merchandiser/shops/${shop.id}`, T.M1, { latitude: 99, longitude: 200 }), 400);
+    const seedCust = await prisma.customer.findFirst({ where: { createdById: null } });
+    if (seedCust) await expect('cannot edit Odoo/other customers', req('PATCH', `/merchandiser/shops/${seedCust.id}`, T.M1, { notes: 'x' }), 403);
 
     // ── F. visits & feedback ────────────────────────────────────────────────
     console.log('\nF. Visits & feedback');
@@ -240,6 +255,16 @@ async function main() {
     const mo = await expect('merchandisers overview', req('GET', '/admin/merchandisers', T.ADMIN), 200);
     check('overview lists both merchandisers with status', ['P2 merch1', 'P2 merch2'].every((n) => mo.json.data.some((u: any) => u.name === n)));
 
+    const sh = await expect('admin shops list (merchandiser-registered)', req('GET', `/admin/shops?q=${encodeURIComponent('P2 Test Shop ' + tag)}`, T.MANAGER), 200);
+    check('shop visible with creator + counts', sh.json.data[0]?.id === shop.id && sh.json.data[0].createdBy.name === 'P2 merch1' && sh.json.data[0]._count.shopVisits === 2);
+    check('source=all also works', (await req('GET', '/admin/shops?source=all&limit=5', T.ADMIN)).status === 200);
+    const sd = await expect('admin shop detail', req('GET', `/admin/shops/${shop.id}`, T.ADMIN), 200);
+    check('shop detail has visit history', sd.json.data.shopVisits.length === 2);
+    const sp = await expect('admin edits shop', req('PATCH', `/admin/shops/${shop.id}`, T.ADMIN, { shopType: 'Supermarket', city: 'Jeddah' }), 200);
+    check('shop updated', sp.json.data.shopType === 'Supermarket' && sp.json.data.city === 'Jeddah');
+    await expect('admin shop bad location', req('PATCH', `/admin/shops/${shop.id}`, T.ADMIN, { latitude: 1000, longitude: 1 }), 400);
+    await expect('admin shop unknown id', req('PATCH', '/admin/shops/00000000-0000-0000-0000-000000000000', T.ADMIN, { city: 'x' }), 404);
+
     const vl = await expect('admin visits list', req('GET', `/admin/shop-visits?merchandiserId=${U.M1.id}&date=${today}`, T.ADMIN), 200);
     check('lists 2 visits with merchandiser + shop', vl.json.data.length === 2 && vl.json.data[0].merchandiser.name === 'P2 merch1' && vl.json.data[0].customer.name.startsWith('P2 Test Shop'));
     check('outOfRange filter', (await req('GET', `/admin/shop-visits?merchandiserId=${U.M1.id}&outOfRange=true`, T.ADMIN)).json.data.length === 1);
@@ -263,6 +288,13 @@ async function main() {
     await expect('deactivated merchandiser: status → 401', req('GET', '/merchandiser/attendance/status', T.M1), 401);
     await expect('deactivated merchandiser: check-in → 401', req('POST', '/merchandiser/attendance/check-in', T.M1, undefined, att()), 401);
 
+    // wait for the fire-and-forget Odoo lead push so we can archive it
+    for (let i = 0; i < 20; i++) {
+      const l = await prisma.lead.findFirst({ where: { customerId: shop.id } });
+      if (l?.odooLeadId) { leadOdooIds.push(l.odooLeadId); break; }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    check('shop lead was pushed to Odoo CRM (existing integration)', leadOdooIds.length === 1);
   } finally {
     console.log('\nCleanup');
     const ids = Object.values(U).map((u: any) => u.id);
@@ -270,7 +302,7 @@ async function main() {
       try { await odooWrite('crm.lead', [id], { active: false }); console.log(`  archived Odoo lead ${id}`); } catch (e: any) { console.log(`  ⚠️  could not archive Odoo lead ${id}: ${e?.message}`); }
     }
     const shops = await prisma.customer.findMany({ where: { createdById: { in: ids } }, select: { id: true } });
-    const shopIds = shops.map((s: any) => s.id);
+    const shopIds = shops.map((s) => s.id);
     await prisma.shopFeedback.deleteMany({ where: { OR: [{ merchandiserId: { in: ids } }, { customerId: { in: shopIds } }] } });
     await prisma.shopVisit.deleteMany({ where: { OR: [{ merchandiserId: { in: ids } }, { customerId: { in: shopIds } }] } });
     await prisma.attendance.deleteMany({ where: { merchandiserId: { in: ids } } });

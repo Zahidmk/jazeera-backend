@@ -5,7 +5,7 @@
  * calling user (req.user.userId), so one merchandiser can never read or change another's records.
  *
  *   Attendance : check-in / check-out (selfie + GPS + device + biometric flag), status, history, own selfies
- *   Shops      : search, nearby (map), detail, view only (merchandisers cannot create or edit shops)
+ *   Shops      : search, nearby (map), detail, register new shop, edit own shop
  *   Visits     : start, current, feedback, end, history, detail
  */
 import { Response } from 'express';
@@ -14,6 +14,7 @@ import prisma from '../utils/prisma';
 import { AuthRequest } from '../types';
 import { parseLatLng, parseOptionalNumber, haversineMeters, boundingBox, riyadhRangeFilter } from '../utils/geo';
 import { removeUploaded, toStoredPath, resolveStoredPath } from '../utils/privateUpload';
+import { pushLeadToOdoo } from './driver.controller';
 
 // A visit started further than this from the shop's recorded location is flagged (not blocked — GPS can be poor).
 const VISIT_RANGE_METERS = 500;
@@ -394,6 +395,92 @@ export const getShopById = async (req: AuthRequest, res: Response): Promise<void
   } catch (err) {
     console.error('getShopById error:', err);
     fail(res, 500, 'Failed to get shop');
+  }
+};
+
+/** Shared validation for create/update. Returns an error message or the cleaned fields. */
+export function parseShopFields(b: any, partial: boolean): { error: string } | { data: Record<string, unknown> } {
+  const data: Record<string, unknown> = {};
+  if (!partial || b.name !== undefined) {
+    const name = str(b.name, 120);
+    if (!name || name.length < 2) return { error: 'Shop name is required (at least 2 characters)' };
+    data.name = name;
+  }
+  if (b.phone !== undefined) {
+    const phone = str(b.phone, 20);
+    if (phone && !/^[0-9+\-\s()]{5,20}$/.test(phone)) return { error: 'Phone number format is invalid' };
+    data.phone = phone ? phone.replace(/\s+/g, '') : null;
+  }
+  for (const [key, max] of [['contactPerson', 100], ['shopType', 60], ['notes', 1000], ['address', 300], ['street', 150],
+    ['district', 100], ['city', 100], ['zip', 20], ['buildingNumber', 30]] as const) {
+    if (b[key] !== undefined) data[key] = str(b[key], max);
+  }
+  if (!partial || b.latitude !== undefined || b.longitude !== undefined) {
+    const pos = parseLatLng(b.latitude, b.longitude);
+    if (!pos) return { error: 'A valid shop location is required (latitude, longitude)' };
+    data.lat = pos.lat;
+    data.lng = pos.lng;
+  }
+  return { data };
+}
+
+// POST /api/v1/merchandiser/shops
+export const createShop = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const parsed = parseShopFields(req.body || {}, false);
+    if ('error' in parsed) return void fail(res, 400, parsed.error);
+    const d = parsed.data as any;
+
+    if (d.phone && !truthy(req.body.confirmDuplicate)) {
+      const dup = await prisma.customer.findFirst({ where: { phone: d.phone }, select: { id: true, name: true } });
+      if (dup) {
+        return void fail(res, 409, 'A shop with this phone number already exists', {
+          code: 'DUPLICATE_PHONE', existingShop: dup,
+        });
+      }
+    }
+
+    // Same pipeline as the driver's "new customer": Customer + Lead (pending admin approval), then pushed to Odoo CRM.
+    const { shop, lead } = await prisma.$transaction(async (tx) => {
+      const shop = await tx.customer.create({ data: { ...d, createdById: userId }, select: shopSelect });
+      const lead = await tx.lead.create({
+        data: {
+          driverId: userId, customerId: shop.id, name: d.name, phone: d.phone ?? null, address: d.address ?? null,
+          street: d.street ?? null, district: d.district ?? null, city: d.city ?? null, zip: d.zip ?? null,
+          buildingNumber: d.buildingNumber ?? null, notes: d.notes ?? null, lat: d.lat, lng: d.lng,
+        },
+      });
+      return { shop, lead };
+    });
+
+    pushLeadToOdoo(lead.id, {
+      name: d.name, phone: d.phone ?? undefined, street: d.street || d.address, district: d.district,
+      city: d.city, zip: d.zip, description: d.notes,
+    }).catch((err: any) => console.error('⚠️  Odoo lead push failed (non-blocking):', err?.message));
+
+    res.status(201).json({ success: true, data: { ...toShop(shop, userId), leadId: lead.id } });
+  } catch (err) {
+    console.error('createShop error:', err);
+    fail(res, 500, 'Failed to register shop');
+  }
+};
+
+// PATCH /api/v1/merchandiser/shops/:id   — only shops this merchandiser registered
+export const updateShop = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const existing = await prisma.customer.findUnique({ where: { id: req.params.id }, select: { id: true, createdById: true } });
+    if (!existing) return void fail(res, 404, 'Shop not found');
+    if (existing.createdById !== userId) return void fail(res, 403, 'You can only edit shops you registered');
+    const parsed = parseShopFields(req.body || {}, true);
+    if ('error' in parsed) return void fail(res, 400, parsed.error);
+    if (Object.keys(parsed.data).length === 0) return void fail(res, 400, 'Nothing to update');
+    const shop = await prisma.customer.update({ where: { id: existing.id }, data: parsed.data, select: shopSelect });
+    res.json({ success: true, data: toShop(shop, userId) });
+  } catch (err) {
+    console.error('updateShop error:', err);
+    fail(res, 500, 'Failed to update shop');
   }
 };
 

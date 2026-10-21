@@ -2,14 +2,14 @@
  * merchandiserAdmin.controller.ts — back-office management of the Merchandiser module (Phase 2)
  *
  * Mounted under /api/v1/admin/* (the admin router already enforces ADMIN / MANAGER).
- *   Attendance, trusted devices, shop visits, feedback review.
+ *   Attendance, trusted devices, shops, shop visits, feedback review.
  */
 import { Response } from 'express';
 import { FeedbackCategory } from '@prisma/client';
 import prisma from '../utils/prisma';
 import { AuthRequest } from '../types';
 import { riyadhRangeFilter, riyadhDayRange } from '../utils/geo';
-import { fail, str, truthy, pageParams, serializeAttendance, sendSelfie } from './merchandiser.controller';
+import { fail, str, truthy, pageParams, serializeAttendance, sendSelfie, parseShopFields } from './merchandiser.controller';
 
 const ADMIN_BASE = '/api/v1/admin';
 const FEEDBACK_STATUSES = ['NEW', 'REVIEWED', 'RESOLVED'];
@@ -178,6 +178,76 @@ export const updateDevice = async (req: AuthRequest, res: Response): Promise<voi
   } catch (err) {
     console.error('updateDevice error:', err);
     fail(res, 500, 'Failed to update device');
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SHOPS
+// ═════════════════════════════════════════════════════════════════════════════
+const adminShopSelect = {
+  id: true, odooId: true, name: true, phone: true, contactPerson: true, shopType: true, notes: true,
+  address: true, street: true, district: true, city: true, zip: true, buildingNumber: true,
+  lat: true, lng: true, createdAt: true, updatedAt: true, createdBy: userBrief,
+  _count: { select: { shopVisits: true, feedbacks: true } },
+} as const;
+
+// GET /api/v1/admin/shops?q=&source=merchandiser|all&createdById=&hasLocation=&page=&limit=
+export const getShops = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { page, limit, skip } = pageParams(req, 30, 200);
+    const q = str(req.query.q, 100);
+    const where: any = {};
+    if (q) {
+      where.OR = [
+        { name: { contains: q, mode: 'insensitive' } }, { phone: { contains: q } },
+        { contactPerson: { contains: q, mode: 'insensitive' } }, { address: { contains: q, mode: 'insensitive' } },
+        { city: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+    if (req.query.createdById) where.createdById = String(req.query.createdById);
+    else if (req.query.source !== 'all') where.createdBy = { role: 'MERCHANDISER' }; // default: shops merchandisers registered
+    if (req.query.hasLocation === 'true') { where.lat = { not: null }; where.lng = { not: null }; }
+    const [rows, total] = await Promise.all([
+      prisma.customer.findMany({ where, select: adminShopSelect, orderBy: { createdAt: 'desc' }, skip, take: limit }),
+      prisma.customer.count({ where }),
+    ]);
+    res.json({ success: true, data: rows, meta: { page, limit, total } });
+  } catch (err) {
+    console.error('getShops error:', err);
+    fail(res, 500, 'Failed to load shops');
+  }
+};
+
+// GET /api/v1/admin/shops/:id
+export const getShopDetail = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const shop = await prisma.customer.findUnique({
+      where: { id: req.params.id },
+      select: {
+        ...adminShopSelect,
+        shopVisits: { orderBy: { startedAt: 'desc' }, take: 20, include: { merchandiser: { select: { id: true, name: true } }, _count: { select: { feedback: true } } } },
+      },
+    });
+    if (!shop) return void fail(res, 404, 'Shop not found');
+    res.json({ success: true, data: shop });
+  } catch (err) {
+    console.error('getShopDetail error:', err);
+    fail(res, 500, 'Failed to load shop');
+  }
+};
+
+// PATCH /api/v1/admin/shops/:id
+export const updateShop = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const parsed = parseShopFields(req.body || {}, true);
+    if ('error' in parsed) return void fail(res, 400, parsed.error);
+    if (Object.keys(parsed.data).length === 0) return void fail(res, 400, 'Nothing to update');
+    const shop = await prisma.customer.update({ where: { id: req.params.id }, data: parsed.data, select: adminShopSelect });
+    res.json({ success: true, data: shop });
+  } catch (err: any) {
+    if (err.code === 'P2025') return void fail(res, 404, 'Shop not found');
+    console.error('admin updateShop error:', err);
+    fail(res, 500, 'Failed to update shop');
   }
 };
 
