@@ -266,6 +266,8 @@ model CashSale {
   vatAmount      Float? // VAT amount, as computed by Odoo (amount_tax)
   receiptUrl     String?
   odooSaleId     Int?
+  odooInvoiceId  Int?
+  invoiceNumber  String?
   latitude       Float?
   longitude      Float?
   createdAt      DateTime @default(now())

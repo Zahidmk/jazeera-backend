@@ -521,6 +521,91 @@ export async function confirmSaleOrderWithVanLocation(
   console.log(`✅ Odoo: Confirmed SO ${odooSaleOrderId} with van location ${vanLocationId}`);
 }
 
+/**
+ * Create and post the customer invoice for a confirmed sale order.
+ * Uses the standard "Create Invoice" wizard (sale.order._create_invoices is
+ * private and not callable over RPC). The wizard bills delivered quantities,
+ * so the delivery must be validated first. Returns the posted invoice, or
+ * null when the order has nothing to invoice.
+ */
+export async function createAndPostInvoice(
+  odooSaleOrderId: number
+): Promise<{ id: number; name: string } | null> {
+  // Re-running must not bill the same order twice
+  const [existing] = await read('sale.order', [odooSaleOrderId], ['invoice_ids']);
+  let invoiceIds: number[] = existing?.invoice_ids ?? [];
+
+  if (invoiceIds.length === 0) {
+    const wizardId = await execute(
+      'sale.advance.payment.inv',
+      'create',
+      [{ advance_payment_method: 'delivered' }],
+      { context: { active_model: 'sale.order', active_ids: [odooSaleOrderId], active_id: odooSaleOrderId } }
+    );
+    let createError: any = null;
+    try {
+      await execute(
+        'sale.advance.payment.inv',
+        'create_invoices',
+        [[wizardId]],
+        { context: { active_model: 'sale.order', active_ids: [odooSaleOrderId], active_id: odooSaleOrderId } }
+      );
+    } catch (err: any) {
+      // The wizard returns a window action containing None, which XML-RPC
+      // cannot marshal — the invoice is already created by then, so verify
+      // by reading it back instead of trusting the response.
+      createError = err;
+    }
+    const [so] = await read('sale.order', [odooSaleOrderId], ['invoice_ids']);
+    invoiceIds = so?.invoice_ids ?? [];
+    if (invoiceIds.length === 0 && createError) throw createError;
+  }
+
+  if (invoiceIds.length === 0) return null;
+  const invoiceId = invoiceIds[invoiceIds.length - 1];
+
+  const [inv] = await read('account.move', [invoiceId], ['state']);
+  if (inv.state === 'draft') {
+    await execute('account.move', 'action_post', [[invoiceId]]);
+  }
+
+  const [posted] = await read('account.move', [invoiceId], ['name']);
+  console.log(`✅ Odoo: Invoice ${posted.name} (ID ${invoiceId}) posted for SO ${odooSaleOrderId}`);
+  return { id: invoiceId, name: posted.name };
+}
+
+/** Odoo QWeb report used for the printed invoice (the "Tax Invoice" layout) */
+const INVOICE_REPORT = 'custom_invoice_layout.custom_arabic_invoice';
+
+/**
+ * Download an invoice PDF from Odoo. PDF rendering is only exposed over the
+ * HTTP report controller (not XML-RPC), so this logs in with a web session.
+ */
+export async function getInvoicePdf(invoiceId: number): Promise<Buffer> {
+  const base = ODOO_URL.replace(/\/$/, '');
+
+  const login = await fetch(`${base}/web/session/authenticate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      params: { db: ODOO_DB, login: ODOO_USERNAME, password: ODOO_PASSWORD },
+    }),
+  });
+  const cookie = (login.headers.getSetCookie?.() ?? [])
+    .map((c) => c.split(';')[0])
+    .join('; ');
+  if (!login.ok || !cookie) throw new Error('Odoo web login failed');
+
+  const res = await fetch(`${base}/report/pdf/${INVOICE_REPORT}/${invoiceId}`, {
+    headers: { Cookie: cookie },
+  });
+  if (!res.ok || !(res.headers.get('content-type') || '').includes('application/pdf')) {
+    throw new Error(`Odoo invoice PDF download failed (HTTP ${res.status})`);
+  }
+  return Buffer.from(await res.arrayBuffer());
+}
+
 /** Update sale order status in Odoo — called when delivery is DELIVERED or FAILED */
 export async function updateSaleOrderStatus(
   odooOrderId: number,
@@ -718,4 +803,6 @@ export default {
   validateStockPicking,
   validateDeliveryForSaleOrder,
   confirmSaleOrderWithVanLocation,
+  createAndPostInvoice,
+  getInvoicePdf,
 };

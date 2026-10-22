@@ -9,6 +9,8 @@ import {
   submitSale,
   uploadReceipt,
   uploadReceiptMiddleware,
+  getInvoice,
+  getInvoicePdf,
 } from '../controllers/cashSale.controller';
 import {
   addCartItemRules,
@@ -27,5 +29,7 @@ router.patch('/cart/items/:itemId', updateCartItem);
 router.delete('/cart/items/:itemId', removeCartItem);
 router.post('/submit', submitSaleRules, validate, submitSale);
 router.post('/:id/receipt', uploadReceiptMiddleware, uploadReceipt);
+router.get('/:id/invoice', getInvoice);
+router.get('/:id/invoice/pdf', getInvoicePdf);
 
 export default router;

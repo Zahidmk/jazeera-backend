@@ -499,8 +499,87 @@ async function pushSaleToOdoo(
 
   // 4. Validate the outgoing delivery picking (deducts stock from Odoo)
   await odoo.validateDeliveryForSaleOrder(odooSaleId);
-  console.log(`✅ Odoo: Cash sale ${saleId} fully synced — SO ${odooSaleId} confirmed and delivery validated`);
+
+  // 5. Create + post the invoice. A failure here must not undo the sale — the
+  //    invoice can be created later by retry-sync / the on-demand endpoint.
+  await ensureInvoice(saleId, odooSaleId);
+  console.log(`✅ Odoo: Cash sale ${saleId} fully synced — SO ${odooSaleId} confirmed, delivered and invoiced`);
 }
+
+// Creates the Odoo invoice for a synced sale and records it locally. Safe to
+// call repeatedly: Odoo-side creation is skipped when the SO already has one.
+async function ensureInvoice(saleId: string, odooSaleId: number): Promise<void> {
+  try {
+    const invoice = await odoo.createAndPostInvoice(odooSaleId);
+    if (invoice) {
+      await prisma.cashSale.update({
+        where: { id: saleId },
+        data: { odooInvoiceId: invoice.id, invoiceNumber: invoice.name },
+      });
+    }
+  } catch (err: any) {
+    console.error(`⚠️  Odoo invoice creation failed for sale ${saleId} (SO ${odooSaleId}):`, err?.message);
+  }
+}
+
+// ─── GET /api/v1/driver/sales/:id/invoice ────────────────────────────────────
+// Invoice status for the app. Sale → Odoo push is async, so the app polls this
+// until `ready` is true, then downloads the PDF. If the SO exists but the
+// invoice step failed earlier, this retries it.
+export const getInvoice = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const sale = await prisma.cashSale.findFirst({ where: { id, driverId: req.user!.userId } });
+    if (!sale) {
+      res.status(404).json({ success: false, error: 'Sale not found' });
+      return;
+    }
+
+    if (!sale.odooInvoiceId && sale.odooSaleId) {
+      await ensureInvoice(sale.id, sale.odooSaleId);
+      const refreshed = await prisma.cashSale.findUnique({ where: { id } });
+      if (refreshed) Object.assign(sale, refreshed);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        ready: !!sale.odooInvoiceId,
+        invoiceNumber: sale.invoiceNumber,
+        odooSaleId: sale.odooSaleId,
+        pdfUrl: sale.odooInvoiceId ? `/api/v1/driver/sales/${sale.id}/invoice/pdf` : null,
+      },
+    });
+  } catch (err: any) {
+    console.error('❌ getInvoice error:', err?.message);
+    res.status(500).json({ success: false, error: 'Failed to load invoice' });
+  }
+};
+
+// ─── GET /api/v1/driver/sales/:id/invoice/pdf ────────────────────────────────
+// Streams the Odoo invoice PDF so the app can print it.
+export const getInvoicePdf = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const sale = await prisma.cashSale.findFirst({ where: { id, driverId: req.user!.userId } });
+    if (!sale) {
+      res.status(404).json({ success: false, error: 'Sale not found' });
+      return;
+    }
+    if (!sale.odooInvoiceId) {
+      res.status(409).json({ success: false, error: 'Invoice is not ready yet' });
+      return;
+    }
+
+    const pdf = await odoo.getInvoicePdf(sale.odooInvoiceId);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="invoice_${(sale.invoiceNumber || sale.id).replace(/[^\w.-]/g, '_')}.pdf"`);
+    res.send(pdf);
+  } catch (err: any) {
+    console.error('❌ getInvoicePdf error:', err?.message);
+    res.status(502).json({ success: false, error: 'Could not fetch invoice PDF from Odoo' });
+  }
+};
 
 // ─── POST /api/v1/admin/cash-sales/:id/retry-sync ────────────────────────────
 // Manually retry the Odoo push for a cash sale that never got an odooSaleId
