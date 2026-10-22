@@ -618,9 +618,30 @@ export const getInvoice = async (req: AuthRequest, res: Response): Promise<void>
 // ─── GET /api/v1/driver/sales/:id/invoice/pdf ────────────────────────────────
 // Streams the Odoo invoice PDF so the app can print it.
 export const getInvoicePdf = async (req: AuthRequest, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const sale = await prisma.cashSale.findFirst({ where: { id, driverId: req.user!.userId } });
+  await sendInvoicePdf(res, sale);
+};
+
+// ─── GET /api/v1/admin/cash-sales/:id/invoice/pdf ────────────────────────────
+// Same PDF for back-office users, for any driver's sale. If the invoice step
+// failed earlier it is retried here (once the original push has had time to
+// finish), so an admin opening a stuck sale gets it created on the spot.
+export const adminGetInvoicePdf = async (req: Request, res: Response): Promise<void> => {
+  const sale = await prisma.cashSale.findUnique({ where: { id: req.params.id } });
+  if (sale && !sale.odooInvoiceId && sale.odooSaleId && Date.now() - sale.createdAt.getTime() > 2 * 60 * 1000) {
+    await ensureInvoice(sale.id, sale.odooSaleId);
+    const refreshed = await prisma.cashSale.findUnique({ where: { id: sale.id } });
+    if (refreshed) Object.assign(sale, refreshed);
+  }
+  await sendInvoicePdf(res, sale);
+};
+
+async function sendInvoicePdf(
+  res: Response,
+  sale: { id: string; odooInvoiceId: number | null; invoiceNumber: string | null } | null
+): Promise<void> {
   try {
-    const { id } = req.params;
-    const sale = await prisma.cashSale.findFirst({ where: { id, driverId: req.user!.userId } });
     if (!sale) {
       res.status(404).json({ success: false, error: 'Sale not found' });
       return;
@@ -635,10 +656,10 @@ export const getInvoicePdf = async (req: AuthRequest, res: Response): Promise<vo
     res.setHeader('Content-Disposition', `inline; filename="invoice_${(sale.invoiceNumber || sale.id).replace(/[^\w.-]/g, '_')}.pdf"`);
     res.send(pdf);
   } catch (err: any) {
-    console.error('❌ getInvoicePdf error:', err?.message);
+    console.error('❌ invoice PDF error:', err?.message);
     res.status(502).json({ success: false, error: 'Could not fetch invoice PDF from Odoo' });
   }
-};
+}
 
 // ─── POST /api/v1/admin/cash-sales/:id/retry-sync ────────────────────────────
 // Manually retry the Odoo push for a cash sale that never got an odooSaleId

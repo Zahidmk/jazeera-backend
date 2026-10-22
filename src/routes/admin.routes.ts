@@ -44,7 +44,7 @@ import {
   reviewFeedback,
 } from '../controllers/merchandiserAdmin.controller';
 import { exportReport, getReportsSummary } from '../controllers/reports.controller';
-import { retryOdooSync } from '../controllers/cashSale.controller';
+import { retryOdooSync, adminGetInvoicePdf } from '../controllers/cashSale.controller';
 import { exportRules, validate } from '../middleware/validators';
 
 const router = Router();
@@ -64,6 +64,9 @@ router.get('/sales', getSales);
 
 // POST /api/v1/admin/cash-sales/:id/retry-sync — retry a failed Odoo push
 router.post('/cash-sales/:id/retry-sync', retryOdooSync);
+
+// GET /api/v1/admin/cash-sales/:id/invoice/pdf — the Odoo invoice PDF for a sale
+router.get('/cash-sales/:id/invoice/pdf', adminGetInvoicePdf);
 
 // GET /api/v1/admin/drivers
 router.get('/drivers', getDrivers);
