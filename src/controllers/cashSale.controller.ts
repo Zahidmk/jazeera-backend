@@ -535,7 +535,10 @@ export const getInvoice = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
-    if (!sale.odooInvoiceId && sale.odooSaleId) {
+    // Only retry once the original background push has had time to finish,
+    // otherwise a poll could race it and invoice the same order twice.
+    const settled = Date.now() - sale.createdAt.getTime() > 2 * 60 * 1000;
+    if (!sale.odooInvoiceId && sale.odooSaleId && settled) {
       await ensureInvoice(sale.id, sale.odooSaleId);
       const refreshed = await prisma.cashSale.findUnique({ where: { id } });
       if (refreshed) Object.assign(sale, refreshed);
