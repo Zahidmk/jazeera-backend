@@ -522,6 +522,62 @@ async function ensureInvoice(saleId: string, odooSaleId: number): Promise<void> 
   }
 }
 
+// ─── GET /api/v1/driver/sales ────────────────────────────────────────────────
+// The driver's completed sales with their invoice status, newest first, for the
+// "My Invoices" screen. `date` (YYYY-MM-DD, Saudi time) narrows it to one day.
+export const listSales = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const page = Math.max(parseInt(String(req.query.page ?? '1'), 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '30'), 10) || 30, 1), 100);
+    const date = typeof req.query.date === 'string' ? req.query.date : undefined;
+
+    const where: any = { driverId: req.user!.userId };
+    if (date) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        res.status(400).json({ success: false, error: 'date must be YYYY-MM-DD' });
+        return;
+      }
+      const start = new Date(`${date}T00:00:00+03:00`);
+      where.createdAt = { gte: start, lt: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+    }
+
+    const [total, sales] = await Promise.all([
+      prisma.cashSale.count({ where }),
+      prisma.cashSale.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        include: { customer: { select: { name: true, phone: true } } },
+      }),
+    ]);
+
+    res.json({
+      success: true,
+      data: sales.map((s) => ({
+        id: s.id,
+        createdAt: s.createdAt,
+        saleType: s.saleType,
+        customerName: s.customer?.name ?? null,
+        customerPhone: s.customer?.phone ?? null,
+        subtotalAmount: s.subtotalAmount ?? s.totalAmount,
+        vatAmount: s.vatAmount,
+        // Odoo's figure when we have it; otherwise the pre-tax total
+        totalAmount:
+          s.subtotalAmount != null && s.vatAmount != null
+            ? parseFloat((s.subtotalAmount + s.vatAmount).toFixed(2))
+            : s.totalAmount,
+        invoiceNumber: s.invoiceNumber,
+        invoiceReady: !!s.odooInvoiceId,
+      })),
+      pagination: { page, limit, total, hasMore: page * limit < total },
+    });
+  } catch (err: any) {
+    console.error('❌ listSales error:', err?.message);
+    res.status(500).json({ success: false, error: 'Failed to load sales' });
+  }
+};
+
 // ─── GET /api/v1/driver/sales/:id/invoice ────────────────────────────────────
 // Invoice status for the app. Sale → Odoo push is async, so the app polls this
 // until `ready` is true, then downloads the PDF. If the SO exists but the

@@ -9,6 +9,7 @@ import {
   submitSale,
   uploadReceipt,
   uploadReceiptMiddleware,
+  listSales,
   getInvoice,
   getInvoicePdf,
 } from '../controllers/cashSale.controller';
@@ -23,6 +24,7 @@ const router = Router();
 router.use(authenticate);
 router.use(authorizeRoles(...DRIVER_APP_ROLES));
 
+router.get('/', listSales);
 router.get('/cart', getCart);
 router.post('/cart/items', addCartItemRules, validate, addCartItem);
 router.patch('/cart/items/:itemId', updateCartItem);
