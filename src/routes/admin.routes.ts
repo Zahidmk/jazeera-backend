@@ -43,6 +43,7 @@ import {
   getFeedback,
   reviewFeedback,
 } from '../controllers/merchandiserAdmin.controller';
+import { getLiveMap } from '../controllers/liveMap.controller';
 import { exportReport, getReportsSummary } from '../controllers/reports.controller';
 import { retryOdooSync, adminGetInvoicePdf } from '../controllers/cashSale.controller';
 import { exportRules, validate } from '../middleware/validators';
@@ -108,6 +109,9 @@ router.patch('/customers/:id/location', updateCustomerLocation);
 router.get('/leads', getLeads);
 router.patch('/leads/:id/approve', approveLead);
 router.patch('/leads/:id/reject', rejectLead);
+
+// ── Live map: last known position of field staff + registered shops ───────────
+router.get('/live-map', getLiveMap);
 
 // ── Merchandiser module (Phase 2) ─────────────────────────────────────────────
 router.get('/merchandisers', getMerchandisers);
