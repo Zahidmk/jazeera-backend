@@ -471,10 +471,11 @@ export const getDamagedStock = async (req: AuthRequest, res: Response): Promise<
     const adjustments = await prisma.stockAdjustment.findMany({
       where: {
         reason: { in: ['DAMAGE', 'EXPIRY', 'RETURN', 'OTHER'] },
-        createdAt: {
-          gte: start,
-          lt: end,
-        },
+        OR: [
+          { createdAt: { gte: start, lt: end } },
+          // Always list warehouse returns still waiting for an admin, whatever their date.
+          { reason: 'RETURN', status: 'PENDING', notes: { startsWith: WAREHOUSE_RETURN_TAG } },
+        ],
       },
       select: {
         id: true,
