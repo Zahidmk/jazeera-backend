@@ -651,6 +651,11 @@ export const resolveDamagedStock = async (req: AuthRequest, res: Response): Prom
       return;
     }
 
+    if (isWarehouseReturn(adjustment.reason, adjustment.notes)) {
+      await resolveWarehouseReturn(req, res, adjustment, action, notes);
+      return;
+    }
+
     await prisma.$transaction(async (tx) => {
       if (action === 'REJECT') {
         // Return stock to van
@@ -762,7 +767,7 @@ export const getReconciliation = async (req: AuthRequest, res: Response): Promis
         status: { not: 'REJECTED' },
         createdAt: inWindow,
       },
-      select: { productId: true, quantity: true },
+      select: { productId: true, quantity: true, reason: true },
     });
 
     const inventory = await prisma.vanInventory.findMany({
@@ -782,9 +787,12 @@ export const getReconciliation = async (req: AuthRequest, res: Response): Promis
       }
     }
 
+    // Units sent back to the warehouse are tracked apart from damage.
     const damagedMap = new Map<string, number>();
+    const returnedMap = new Map<string, number>();
     for (const adj of adjustments) {
-      damagedMap.set(adj.productId, (damagedMap.get(adj.productId) ?? 0) + Math.abs(adj.quantity));
+      const target = adj.reason === 'RETURN' ? returnedMap : damagedMap;
+      target.set(adj.productId, (target.get(adj.productId) ?? 0) + Math.abs(adj.quantity));
     }
 
     const balanceMap = new Map<string, number>();
@@ -795,6 +803,7 @@ export const getReconciliation = async (req: AuthRequest, res: Response): Promis
       ...loadedMap.keys(),
       ...soldMap.keys(),
       ...damagedMap.keys(),
+      ...returnedMap.keys(),
       ...balanceMap.keys(),
     ]);
 
@@ -808,6 +817,7 @@ export const getReconciliation = async (req: AuthRequest, res: Response): Promis
       const loaded = loadedMap.get(p.id) ?? 0;
       const sold = soldMap.get(p.id) ?? 0;
       const damaged = damagedMap.get(p.id) ?? 0;
+      const returned = returnedMap.get(p.id) ?? 0;
       const balance = balanceMap.get(p.id) ?? 0;
 
       return {
@@ -818,14 +828,17 @@ export const getReconciliation = async (req: AuthRequest, res: Response): Promis
         loadedStock: loaded,
         soldStock: sold,
         damagedStock: damaged,
+        returnedStock: returned,
         balanceStock: balance,
         // Stock the van already held before this shift's loads. Negative means
         // units loaded this shift are unaccounted for (missing).
-        openingStock: balance + sold + damaged - loaded,
+        openingStock: balance + sold + damaged + returned - loaded,
       };
     });
 
-    const sum = (key: 'loadedStock' | 'soldStock' | 'damagedStock' | 'balanceStock' | 'openingStock') =>
+    const sum = (
+      key: 'loadedStock' | 'soldStock' | 'damagedStock' | 'returnedStock' | 'balanceStock' | 'openingStock'
+    ) =>
       productDetailsList.reduce((total, item) => total + item[key], 0);
 
     res.json({
@@ -836,6 +849,7 @@ export const getReconciliation = async (req: AuthRequest, res: Response): Promis
           loadedStock: sum('loadedStock'),
           soldStock: sum('soldStock'),
           damagedStock: sum('damagedStock'),
+          returnedStock: sum('returnedStock'),
           balanceStock: sum('balanceStock'),
           openingStock: sum('openingStock'),
         },
@@ -951,6 +965,310 @@ export const submitReconciliation = async (req: AuthRequest, res: Response): Pro
     res.status(500).json({ success: false, error: 'Failed to update stock reconciliation' });
   }
 };
+
+// ─── Warehouse returns (van → main warehouse) ────────────────────────────────
+// Stored as RETURN stock adjustments tagged in `notes`. Units leave the van as soon
+// as the request is made (so they can't be sold meanwhile); the Odoo transfer is
+// created when an admin or manager approves it, and a rejection restores the stock.
+const WAREHOUSE_RETURN_TAG = 'Warehouse return';
+const RETURN_CONDITIONS = ['GOOD', 'DAMAGED'];
+
+function isWarehouseReturn(reason: string, notes: string | null): boolean {
+  return reason === 'RETURN' && !!notes && notes.startsWith(WAREHOUSE_RETURN_TAG);
+}
+
+class ReturnStockError extends Error {
+  constructor(public productId: string) {
+    super('Insufficient stock');
+  }
+}
+
+// ─── GET /api/v1/storekeeper/vans/:vanId/inventory ───────────────────────────
+export const getVanInventory = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { vanId } = req.params;
+
+    const items = await prisma.vanInventory.findMany({
+      where: { vanId, quantity: { gt: 0 } },
+      include: { product: { select: { id: true, name: true, sku: true, imageUrl: true } } },
+      orderBy: { product: { name: 'asc' } },
+    });
+
+    res.json({
+      success: true,
+      data: items.map((i) => ({
+        productId: i.productId,
+        productName: i.product.name,
+        sku: i.product.sku,
+        imageUrl: i.product.imageUrl,
+        quantity: i.quantity,
+      })),
+    });
+  } catch (err) {
+    console.error('Error fetching van inventory for storekeeper:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch van inventory' });
+  }
+};
+
+// ─── POST /api/v1/storekeeper/vans/:vanId/returns ────────────────────────────
+// body: { items: [{ productId, quantity, condition: 'GOOD' | 'DAMAGED' }], notes? }
+export const createWarehouseReturn = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { vanId } = req.params;
+    const { items, notes } = req.body;
+
+    if (!Array.isArray(items) || items.length === 0 || items.length > 50) {
+      res.status(400).json({ success: false, error: 'items must be a list of 1 to 50 products' });
+      return;
+    }
+
+    for (const item of items) {
+      if (
+        !item ||
+        typeof item.productId !== 'string' ||
+        !Number.isInteger(item.quantity) ||
+        item.quantity <= 0 ||
+        !RETURN_CONDITIONS.includes(item.condition)
+      ) {
+        res.status(400).json({
+          success: false,
+          error: 'Each item needs a productId, a whole quantity above 0 and a condition of GOOD or DAMAGED',
+        });
+        return;
+      }
+    }
+
+    const van = await prisma.van.findUnique({
+      where: { id: vanId },
+      include: { shifts: { orderBy: { startedAt: 'desc' }, take: 1 } },
+    });
+
+    if (!van) {
+      res.status(404).json({ success: false, error: 'Van not found' });
+      return;
+    }
+
+    const driverId = van.shifts[0]?.driverId || van.driverId;
+    if (!driverId) {
+      res.status(400).json({ success: false, error: 'No driver is assigned to this van' });
+      return;
+    }
+
+    const userNotes = typeof notes === 'string' ? notes.trim().slice(0, 500) : '';
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        for (const item of items) {
+          // Conditional decrement keeps the stock check and the update atomic.
+          const result = await tx.vanInventory.updateMany({
+            where: { vanId, productId: item.productId, quantity: { gte: item.quantity } },
+            data: { quantity: { decrement: item.quantity } },
+          });
+          if (result.count === 0) throw new ReturnStockError(item.productId);
+
+          await tx.stockAdjustment.create({
+            data: {
+              driverId,
+              vanId,
+              productId: item.productId,
+              quantity: -item.quantity,
+              reason: 'RETURN',
+              status: 'PENDING',
+              notes: `${WAREHOUSE_RETURN_TAG} (${item.condition})${userNotes ? ` - ${userNotes}` : ''}`,
+            },
+          });
+        }
+      });
+    } catch (err) {
+      if (err instanceof ReturnStockError) {
+        const product = await prisma.product.findUnique({
+          where: { id: err.productId },
+          select: { name: true },
+        });
+        res.status(400).json({
+          success: false,
+          error: `Insufficient stock in the van for ${product?.name ?? 'a selected product'}`,
+        });
+        return;
+      }
+      throw err;
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Return request submitted. Stock moves to the warehouse once an admin approves it.',
+    });
+  } catch (err) {
+    console.error('Error creating warehouse return:', err);
+    res.status(500).json({ success: false, error: 'Failed to submit warehouse return' });
+  }
+};
+
+// ─── GET /api/v1/storekeeper/returns ─────────────────────────────────────────
+export const getWarehouseReturns = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const rows = await prisma.stockAdjustment.findMany({
+      where: { reason: 'RETURN', notes: { startsWith: WAREHOUSE_RETURN_TAG } },
+      include: {
+        product: { select: { id: true, name: true, sku: true } },
+        van: { select: { plateNumber: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+
+    res.json({
+      success: true,
+      data: rows.map((r) => ({
+        id: r.id,
+        productId: r.productId,
+        productName: r.product.name,
+        sku: r.product.sku,
+        quantity: Math.abs(r.quantity),
+        condition: r.notes?.includes('(DAMAGED)') ? 'DAMAGED' : 'GOOD',
+        vanNumber: r.van?.plateNumber ?? 'No Van',
+        status: r.status,
+        notes: r.notes,
+        createdAt: r.createdAt,
+      })),
+    });
+  } catch (err) {
+    console.error('Error fetching warehouse returns:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch warehouse returns' });
+  }
+};
+
+type PendingReturn = {
+  id: string;
+  vanId: string | null;
+  productId: string;
+  quantity: number;
+  notes: string | null;
+  van: { id: string; plateNumber: string; odooLocationId: number | null } | null;
+};
+
+// Approve/reject a warehouse return. Only admins and managers may resolve one.
+async function resolveWarehouseReturn(
+  req: AuthRequest,
+  res: Response,
+  adj: PendingReturn,
+  action: string,
+  adminNotes?: string
+): Promise<void> {
+  const role = req.user?.role;
+  if (role !== 'ADMIN' && role !== 'MANAGER') {
+    res.status(403).json({ success: false, error: 'Only an admin or manager can approve or reject warehouse returns' });
+    return;
+  }
+
+  const qty = Math.abs(adj.quantity);
+  const finalNotes =
+    typeof adminNotes === 'string' && adminNotes.trim()
+      ? `${adj.notes} | ${role}: ${adminNotes.trim().slice(0, 300)}`
+      : adj.notes;
+
+  if (action === 'REJECT') {
+    const done = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.stockAdjustment.updateMany({
+        where: { id: adj.id, status: 'PENDING' },
+        data: { status: 'REJECTED', notes: finalNotes },
+      });
+      if (claimed.count === 0) return false;
+      if (adj.vanId) {
+        await tx.vanInventory.upsert({
+          where: { vanId_productId: { vanId: adj.vanId, productId: adj.productId } },
+          update: { quantity: { increment: qty } },
+          create: { vanId: adj.vanId, productId: adj.productId, quantity: qty },
+        });
+      }
+      return true;
+    });
+
+    if (!done) {
+      res.status(400).json({ success: false, error: 'This request was already resolved' });
+      return;
+    }
+    res.json({ success: true, message: 'Warehouse return rejected. Stock restored to the van.' });
+    return;
+  }
+
+  if (!adj.van) {
+    res.status(400).json({ success: false, error: 'Return has no van, cannot create the warehouse transfer' });
+    return;
+  }
+
+  // Claim the request first so a double tap can't create two Odoo transfers.
+  const claimed = await prisma.stockAdjustment.updateMany({
+    where: { id: adj.id, status: 'PENDING' },
+    data: { status: 'APPROVED', notes: finalNotes },
+  });
+  if (claimed.count === 0) {
+    res.status(400).json({ success: false, error: 'This request was already resolved' });
+    return;
+  }
+
+  try {
+    await pushReturnToWarehouseOdoo(adj.van, adj.productId, qty, adj.id);
+  } catch (err: any) {
+    // Leave it pending so it can be approved again once Odoo is reachable.
+    await prisma.stockAdjustment.updateMany({
+      where: { id: adj.id },
+      data: { status: 'PENDING', notes: adj.notes },
+    });
+    console.error('❌ Odoo warehouse return transfer failed:', err?.message);
+    res.status(502).json({
+      success: false,
+      error: `Odoo transfer failed, the request is still pending: ${err?.message ?? 'unknown error'}`,
+    });
+    return;
+  }
+
+  res.json({ success: true, message: 'Warehouse return approved. Stock moved to the main warehouse.' });
+}
+
+// Internal transfer van location → main warehouse, validated immediately.
+async function pushReturnToWarehouseOdoo(
+  van: { id: string; plateNumber: string; odooLocationId: number | null },
+  productId: string,
+  qty: number,
+  adjustmentId: string
+): Promise<void> {
+  const product = await prisma.product.findUnique({
+    where: { id: productId },
+    select: { odooId: true, name: true },
+  });
+
+  if (!product?.odooId) {
+    console.warn(`⚠️ Product ${productId} has no odooId — skipping Odoo warehouse return`);
+    return;
+  }
+
+  let vanLocationId = van.odooLocationId;
+  if (!vanLocationId) {
+    vanLocationId = await odoo.findOrCreateVanLocation(van.plateNumber);
+    await prisma.van.update({ where: { id: van.id }, data: { odooLocationId: vanLocationId } });
+  }
+
+  const warehouseLocationId = await odoo.getWarehouseStockLocationId();
+
+  const pickingId = await odoo.createStockTransfer(
+    vanLocationId,
+    warehouseLocationId,
+    [{ productOdooId: product.odooId, quantity: qty, productName: product.name }],
+    `Return to warehouse from ${van.plateNumber} — Jazeera mobile app (${adjustmentId})`,
+    'VAN-RETURN'
+  );
+
+  await odoo.validateStockPicking(pickingId);
+
+  // button_validate can open a wizard instead of failing, so confirm it really completed.
+  const [picking] = await odoo.searchRead('stock.picking', [['id', '=', pickingId]], ['state']);
+  if (picking?.state !== 'done') {
+    throw new Error(`transfer ${pickingId} was created in Odoo but is in state "${picking?.state ?? 'unknown'}"`);
+  }
+
+  console.log(`✅ Odoo: ${qty} × ${product.name} returned from ${van.plateNumber} to the warehouse (picking ${pickingId})`);
+}
 
 // ─── Helper: push stock adjustment to Odoo using van's Odoo location ──────────
 async function pushAdjustmentToOdooBackground(

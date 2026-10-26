@@ -13,6 +13,9 @@ import {
   getReconciliation,
   submitReconciliation,
   getDriversList,
+  getVanInventory,
+  createWarehouseReturn,
+  getWarehouseReturns,
 } from '../controllers/storekeeper.controller';
 import { assignVanLoadRules, validate } from '../middleware/validators';
 
@@ -38,5 +41,8 @@ router.post('/damaged-stock', reportDamagedStock);
 router.post('/damaged-stock/:id/resolve', resolveDamagedStock);
 router.get('/vans/:vanId/reconciliation', getReconciliation);
 router.post('/vans/:vanId/reconciliation', submitReconciliation);
+router.get('/vans/:vanId/inventory', getVanInventory);
+router.post('/vans/:vanId/returns', createWarehouseReturn);
+router.get('/returns', getWarehouseReturns);
 
 export default router;

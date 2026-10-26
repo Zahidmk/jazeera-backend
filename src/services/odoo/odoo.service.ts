@@ -369,7 +369,8 @@ export async function createStockTransfer(
   fromLocationId: number,
   toLocationId: number,
   lines: { productOdooId: number; quantity: number; productName?: string }[],
-  note?: string
+  note?: string,
+  originPrefix: string = 'VAN-LOAD'
 ): Promise<number> {
   // Find the internal operation type
   const opTypes: any[] = await searchRead(
@@ -397,7 +398,7 @@ export async function createStockTransfer(
     location_dest_id: toLocationId,
     move_ids: moveLines,
     note: note || 'Van stock load — created by Jazeera mobile app',
-    origin: `VAN-LOAD-${Date.now()}`,
+    origin: `${originPrefix}-${Date.now()}`,
   });
 
   console.log(`✅ Odoo: Created stock transfer ID ${pickingId} (${fromLocationId} → ${toLocationId})`);
