@@ -692,26 +692,40 @@ export const resolveDamagedStock = async (req: AuthRequest, res: Response): Prom
   }
 };
 
+// Reconciliation works on the van's active shift, or on the latest ended one so it
+// can still be done after the driver has closed the shift.
+async function findReconciliationShift(vanId: string) {
+  const active = await prisma.shift.findFirst({
+    where: { vanId, status: 'ACTIVE' },
+    include: { driver: true, van: true },
+    orderBy: { startedAt: 'desc' },
+  });
+  if (active) return active;
+  return prisma.shift.findFirst({
+    where: { vanId },
+    include: { driver: true, van: true },
+    orderBy: { startedAt: 'desc' },
+  });
+}
+
 // ─── GET /api/v1/storekeeper/vans/:vanId/reconciliation ──────────────────────
 export const getReconciliation = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { vanId } = req.params;
 
-    const shift = await prisma.shift.findFirst({
-      where: { vanId, status: 'ACTIVE' },
-      include: { driver: true },
-      orderBy: { startedAt: 'desc' },
-    });
+    const shift = await findReconciliationShift(vanId);
 
     if (!shift) {
       res.status(400).json({
         success: false,
-        error: 'No active shift found for this van. Please have the driver start their shift first.',
+        error: 'No shift found for this van. Please have the driver start their shift first.',
       });
       return;
     }
 
     const driverId = shift.driverId;
+    const windowEnd = shift.endedAt ?? new Date();
+    const inWindow = { gte: shift.startedAt, lte: windowEnd };
 
     const loadedQueue = await prisma.stockLoadQueue.findMany({
       where: { shiftId: shift.id, confirmed: true },
@@ -719,22 +733,24 @@ export const getReconciliation = async (req: AuthRequest, res: Response): Promis
     });
 
     const cashSales = await prisma.cashSale.findMany({
-      where: { driverId, createdAt: { gte: shift.startedAt } },
+      where: { driverId, createdAt: inWindow },
       include: { items: true },
     });
 
+    // Rejected adjustments were returned to the van, so they are not damage.
     const adjustments = await prisma.stockAdjustment.findMany({
-      where: { driverId, reason: { in: ['DAMAGE', 'EXPIRY', 'RETURN', 'OTHER'] }, createdAt: { gte: shift.startedAt } },
+      where: {
+        vanId,
+        reason: { in: ['DAMAGE', 'EXPIRY', 'RETURN', 'OTHER'] },
+        status: { not: 'REJECTED' },
+        createdAt: inWindow,
+      },
       select: { productId: true, quantity: true },
     });
 
     const inventory = await prisma.vanInventory.findMany({
       where: { vanId },
-      include: {
-        product: {
-          select: { id: true, name: true, sku: true, imageUrl: true },
-        },
-      },
+      select: { productId: true, quantity: true },
     });
 
     const loadedMap = new Map<string, number>();
@@ -754,12 +770,28 @@ export const getReconciliation = async (req: AuthRequest, res: Response): Promis
       damagedMap.set(adj.productId, (damagedMap.get(adj.productId) ?? 0) + Math.abs(adj.quantity));
     }
 
-    const productDetailsList = inventory.map((inv) => {
-      const p = inv.product;
+    const balanceMap = new Map<string, number>();
+    for (const inv of inventory) balanceMap.set(inv.productId, inv.quantity);
+
+    // Include every product that moved this shift, even if its inventory row is empty.
+    const productIds = new Set<string>([
+      ...loadedMap.keys(),
+      ...soldMap.keys(),
+      ...damagedMap.keys(),
+      ...balanceMap.keys(),
+    ]);
+
+    const products = await prisma.product.findMany({
+      where: { id: { in: [...productIds] } },
+      select: { id: true, name: true, sku: true, imageUrl: true },
+      orderBy: { name: 'asc' },
+    });
+
+    const productDetailsList = products.map((p) => {
       const loaded = loadedMap.get(p.id) ?? 0;
       const sold = soldMap.get(p.id) ?? 0;
       const damaged = damagedMap.get(p.id) ?? 0;
-      const balance = inv.quantity;
+      const balance = balanceMap.get(p.id) ?? 0;
 
       return {
         productId: p.id,
@@ -770,22 +802,25 @@ export const getReconciliation = async (req: AuthRequest, res: Response): Promis
         soldStock: sold,
         damagedStock: damaged,
         balanceStock: balance,
+        // Stock the van already held before this shift's loads. Negative means
+        // units loaded this shift are unaccounted for (missing).
+        openingStock: balance + sold + damaged - loaded,
       };
     });
 
-    const totalLoaded = productDetailsList.reduce((sum, item) => sum + item.loadedStock, 0);
-    const totalSold = productDetailsList.reduce((sum, item) => sum + item.soldStock, 0);
-    const totalDamaged = productDetailsList.reduce((sum, item) => sum + item.damagedStock, 0);
-    const totalBalance = productDetailsList.reduce((sum, item) => sum + item.balanceStock, 0);
+    const sum = (key: 'loadedStock' | 'soldStock' | 'damagedStock' | 'balanceStock' | 'openingStock') =>
+      productDetailsList.reduce((total, item) => total + item[key], 0);
 
     res.json({
       success: true,
       data: {
+        shiftStatus: shift.status,
         summary: {
-          loadedStock: totalLoaded,
-          soldStock: totalSold,
-          damagedStock: totalDamaged,
-          balanceStock: totalBalance,
+          loadedStock: sum('loadedStock'),
+          soldStock: sum('soldStock'),
+          damagedStock: sum('damagedStock'),
+          balanceStock: sum('balanceStock'),
+          openingStock: sum('openingStock'),
         },
         products: productDetailsList,
       },
@@ -797,13 +832,21 @@ export const getReconciliation = async (req: AuthRequest, res: Response): Promis
 };
 
 // ─── POST /api/v1/storekeeper/vans/:vanId/reconciliation ─────────────────────
+// soldQuantity / damagedQuantity are ADDITIONAL units to record, not running totals.
 export const submitReconciliation = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { vanId } = req.params;
-    const { productId, soldQuantity = 0, damagedQuantity = 0 } = req.body;
+    const { productId } = req.body;
+    const soldQuantity = req.body.soldQuantity ?? 0;
+    const damagedQuantity = req.body.damagedQuantity ?? 0;
 
-    if (!productId) {
+    if (!productId || typeof productId !== 'string') {
       res.status(400).json({ success: false, error: 'productId is required' });
+      return;
+    }
+
+    if (!Number.isInteger(soldQuantity) || !Number.isInteger(damagedQuantity)) {
+      res.status(400).json({ success: false, error: 'Quantities must be whole numbers' });
       return;
     }
 
@@ -818,55 +861,41 @@ export const submitReconciliation = async (req: AuthRequest, res: Response): Pro
       return;
     }
 
-    const shift = await prisma.shift.findFirst({
-      where: { vanId, status: 'ACTIVE' },
-      include: { van: true },
-      orderBy: { startedAt: 'desc' },
-    });
+    const shift = await findReconciliationShift(vanId);
 
     if (!shift) {
       res.status(400).json({
         success: false,
-        error: 'No active shift found for this van. Please have the driver start their shift first.',
+        error: 'No shift found for this van. Please have the driver start their shift first.',
       });
       return;
     }
 
-    const driverId = shift.driverId;
-
-    const inventoryItem = await prisma.vanInventory.findUnique({
-      where: { vanId_productId: { vanId, productId } },
-      include: { product: true },
-    });
-
-    if (!inventoryItem || inventoryItem.quantity < totalToDeduct) {
-      res.status(400).json({ success: false, error: 'Insufficient stock in van inventory for this reconciliation' });
+    const product = await prisma.product.findUnique({ where: { id: productId } });
+    if (!product) {
+      res.status(404).json({ success: false, error: 'Product not found' });
       return;
     }
 
-    const product = inventoryItem.product;
+    const storekeeperNote = `Reconciled by storekeeper ${req.user?.userId ?? ''}`.trim();
 
-    await prisma.$transaction(async (tx) => {
-      await tx.vanInventory.update({
-        where: { vanId_productId: { vanId, productId } },
+    const deducted = await prisma.$transaction(async (tx) => {
+      // Conditional decrement keeps the stock check and the update atomic.
+      const result = await tx.vanInventory.updateMany({
+        where: { vanId, productId, quantity: { gte: totalToDeduct } },
         data: { quantity: { decrement: totalToDeduct } },
       });
+      if (result.count === 0) return false;
 
       if (soldQuantity > 0) {
         await tx.cashSale.create({
           data: {
-            driverId,
+            driverId: shift.driverId,
             customerId: null,
             saleType: 'CASH',
             totalAmount: parseFloat((soldQuantity * product.priceRetail).toFixed(2)),
             items: {
-              create: [
-                {
-                  productId,
-                  quantity: soldQuantity,
-                  unitPrice: product.priceRetail,
-                },
-              ],
+              create: [{ productId, quantity: soldQuantity, unitPrice: product.priceRetail }],
             },
           },
         });
@@ -881,14 +910,20 @@ export const submitReconciliation = async (req: AuthRequest, res: Response): Pro
             quantity: -damagedQuantity,
             reason: 'DAMAGE',
             status: 'APPROVED',
-            notes: 'Reconciled by storekeeper (shortage treated as damage/loss)',
+            notes: `${storekeeperNote} (shortage treated as damage/loss)`,
           },
         });
       }
+      return true;
     });
 
+    if (!deducted) {
+      res.status(400).json({ success: false, error: 'Insufficient stock in van inventory for this reconciliation' });
+      return;
+    }
+
     if (damagedQuantity > 0) {
-      pushAdjustmentToOdooBackground(shift.van, productId, damagedQuantity, 'DAMAGE', 'Reconciled by storekeeper').catch((err) =>
+      pushAdjustmentToOdooBackground(shift.van, productId, damagedQuantity, 'DAMAGE', storekeeperNote).catch((err) =>
         console.error('⚠️ Background Odoo reconciliation adjustment push failed:', err?.message)
       );
     }
