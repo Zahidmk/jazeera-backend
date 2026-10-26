@@ -34,7 +34,7 @@ export const getLiveMap = async (_req: AuthRequest, res: Response): Promise<void
     const today = riyadhDayRange(new Date(now.getTime() + 3 * 3600 * 1000).toISOString().slice(0, 10))!;
     const dayWindow = { gte: today.start, lt: today.end };
 
-    const [merchandisers, fieldStaff, attendances, visits, openVisits, sales, activeShifts, shops] = await Promise.all([
+    const [merchandisers, fieldStaff, attendances, visits, openVisits, openAttendances, sales, activeShifts, shops] = await Promise.all([
       prisma.user.findMany({
         where: { role: 'MERCHANDISER', isActive: true },
         select: { id: true, name: true, phone: true },
@@ -61,9 +61,18 @@ export const getLiveMap = async (_req: AuthRequest, res: Response): Promise<void
           customer: { select: { name: true } },
         },
       }),
+      // Open visits / attendances of ANY day: one left open from an earlier day means the
+      // person never checked out, which must not read as "in a visit" now.
       prisma.shopVisit.findMany({
         where: { openKey: { not: null } },
-        select: { merchandiserId: true, customer: { select: { name: true } } },
+        select: {
+          merchandiserId: true, startedAt: true, startLat: true, startLng: true,
+          customer: { select: { name: true } },
+        },
+      }),
+      prisma.attendance.findMany({
+        where: { openKey: { not: null } },
+        select: { merchandiserId: true, checkInAt: true, checkInLat: true, checkInLng: true },
       }),
       prisma.cashSale.findMany({
         where: { createdAt: dayWindow, latitude: { not: null }, longitude: { not: null } },
@@ -124,17 +133,35 @@ export const getLiveMap = async (_req: AuthRequest, res: Response): Promise<void
         );
       }
     }
-    const inVisit = new Map(openVisits.map((v) => [v.merchandiserId, v.customer.name] as const));
+    const openVisitByUser = new Map<string, (typeof openVisits)[number]>();
+    for (const v of openVisits) openVisitByUser.set(v.merchandiserId, v);
+    const openAttendanceByUser = new Map<string, (typeof openAttendances)[number]>();
+    for (const a of openAttendances) openAttendanceByUser.set(a.merchandiserId, a);
 
     const merchandiserRows = merchandisers.map((u) => {
-      const last = lastByUser.get(u.id);
-      const status = inVisit.has(u.id)
+      const openVisit = openVisitByUser.get(u.id);
+      const openAtt = openAttendanceByUser.get(u.id);
+      const visitToday = !!openVisit && openVisit.startedAt >= today.start;
+      const attendanceToday = !!openAtt && openAtt.checkInAt >= today.start;
+
+      const status = visitToday
         ? 'IN_VISIT'
-        : openAttendance.has(u.id)
+        : attendanceToday
         ? 'ON_DUTY'
+        : openVisit || openAtt
+        ? 'STALE_OPEN' // still checked in / in a visit from an earlier day
         : anyAttendance.has(u.id)
         ? 'CHECKED_OUT'
         : 'NOT_STARTED';
+
+      // Today's newest event; for a stale open session fall back to where it started.
+      let last = lastByUser.get(u.id);
+      if (!last && status === 'STALE_OPEN') {
+        last = openVisit
+          ? { at: openVisit.startedAt, lat: openVisit.startLat, lng: openVisit.startLng, source: 'VISIT_START', detail: openVisit.customer.name }
+          : { at: openAtt!.checkInAt, lat: openAtt!.checkInLat, lng: openAtt!.checkInLng, source: 'CHECK_IN', detail: null };
+      }
+
       return {
         id: u.id,
         name: u.name,
@@ -145,7 +172,7 @@ export const getLiveMap = async (_req: AuthRequest, res: Response): Promise<void
         lng: last?.lng ?? null,
         at: last?.at ?? null,
         source: last?.source ?? null,
-        detail: inVisit.get(u.id) ?? last?.detail ?? null,
+        detail: (visitToday ? openVisit!.customer.name : null) ?? last?.detail ?? null,
       };
     });
 
