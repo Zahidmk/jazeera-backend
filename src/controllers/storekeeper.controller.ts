@@ -724,8 +724,25 @@ export const getReconciliation = async (req: AuthRequest, res: Response): Promis
     }
 
     const driverId = shift.driverId;
-    const windowEnd = shift.endedAt ?? new Date();
-    const inWindow = { gte: shift.startedAt, lte: windowEnd };
+
+    // Records made while reconciling after the shift ended are created after
+    // endedAt, so the window stays open until the van's or driver's next shift.
+    const [nextVanShift, nextDriverShift] = await Promise.all([
+      prisma.shift.findFirst({
+        where: { vanId, startedAt: { gt: shift.startedAt } },
+        orderBy: { startedAt: 'asc' },
+        select: { startedAt: true },
+      }),
+      prisma.shift.findFirst({
+        where: { driverId, startedAt: { gt: shift.startedAt } },
+        orderBy: { startedAt: 'asc' },
+        select: { startedAt: true },
+      }),
+    ]);
+    const windowEnd = [nextVanShift?.startedAt, nextDriverShift?.startedAt]
+      .filter((d): d is Date => !!d)
+      .sort((a, b) => a.getTime() - b.getTime())[0];
+    const inWindow = windowEnd ? { gte: shift.startedAt, lt: windowEnd } : { gte: shift.startedAt };
 
     const loadedQueue = await prisma.stockLoadQueue.findMany({
       where: { shiftId: shift.id, confirmed: true },
