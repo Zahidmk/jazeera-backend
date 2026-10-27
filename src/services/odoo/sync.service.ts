@@ -9,8 +9,18 @@ export async function syncProducts(): Promise<{ created: number; updated: number
   let created = 0;
   let updated = 0;
 
+  let skipped = 0;
+
   for (const op of odooProducts) {
-    const sku = op.default_code || `ODOO-${op.id}`;
+    try {
+    let sku = op.default_code || `ODOO-${op.id}`;
+
+    // Odoo does not enforce unique internal references, but our SKU is unique.
+    // If another Odoo product already owns this SKU, make ours unique.
+    const skuOwner = await prisma.product.findUnique({ where: { sku } });
+    if (skuOwner && skuOwner.odooId !== null && skuOwner.odooId !== op.id) {
+      sku = `${sku}-${op.id}`;
+    }
     const data = {
       odooId: op.id,
       name: op.name || 'Unknown Product',
@@ -48,9 +58,13 @@ export async function syncProducts(): Promise<{ created: number; updated: number
         created++;
       }
     }
+    } catch (err: any) {
+      skipped++;
+      console.error(`⚠️ Skipped Odoo product ${op.id} (${op.default_code}): ${err.message}`);
+    }
   }
 
-  console.log(`✅ Products synced — Created: ${created}, Updated: ${updated}, Total from Odoo: ${odooProducts.length}`);
+  console.log(`✅ Products synced — Created: ${created}, Updated: ${updated}, Skipped: ${skipped}, Total from Odoo: ${odooProducts.length}`);
   return { created, updated, total: odooProducts.length };
 }
 
