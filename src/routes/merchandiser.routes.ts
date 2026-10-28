@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate, authorizeRoles } from '../middleware/auth';
 import { MERCHANDISER_APP_ROLES } from '../constants/roles';
+import { getTeamMap } from '../controllers/liveMap.controller';
 import { selfieUpload } from '../utils/privateUpload';
 import {
   getAttendanceStatus,
@@ -35,6 +36,7 @@ router.get('/attendance', getAttendanceHistory);
 router.get('/attendance/:id/selfie', getOwnSelfie);
 
 // ── Shops (static paths before /:id)
+router.get('/team-map', getTeamMap);
 router.get('/shops/nearby', getNearbyShops);
 router.get('/shops', searchShops);
 router.post('/shops', createShop);

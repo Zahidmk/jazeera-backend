@@ -27,9 +27,7 @@ function latest(current: LastKnown | undefined, next: LastKnown): LastKnown {
   return !current || next.at > current.at ? next : current;
 }
 
-// GET /api/v1/admin/live-map
-export const getLiveMap = async (_req: AuthRequest, res: Response): Promise<void> => {
-  try {
+async function buildLiveMap() {
     const now = new Date();
     const today = riyadhDayRange(new Date(now.getTime() + 3 * 3600 * 1000).toISOString().slice(0, 10))!;
     const dayWindow = { gte: today.start, lt: today.end };
@@ -199,16 +197,40 @@ export const getLiveMap = async (_req: AuthRequest, res: Response): Promise<void
       };
     });
 
-    res.json({
-      success: true,
-      data: {
-        generatedAt: now.toISOString(),
-        people: [...merchandiserRows, ...fieldRows],
-        shops,
-      },
-    });
+    return {
+      generatedAt: now.toISOString(),
+      people: [...merchandiserRows, ...fieldRows],
+      shops,
+    };
+}
+
+// GET /api/v1/admin/live-map
+export const getLiveMap = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    res.json({ success: true, data: await buildLiveMap() });
   } catch (err) {
     console.error('getLiveMap error:', err);
     res.status(500).json({ success: false, error: 'Failed to load live map' });
+  }
+};
+
+// GET /api/v1/merchandiser/team-map — merchandisers see each other (name, status, last position)
+// and the merchandiser-registered shops. No phone numbers, no drivers/salesmen.
+export const getTeamMap = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const data = await buildLiveMap();
+    res.json({
+      success: true,
+      data: {
+        generatedAt: data.generatedAt,
+        people: data.people
+          .filter((p) => p.role === 'MERCHANDISER')
+          .map(({ phone: _phone, ...rest }) => rest),
+        shops: data.shops,
+      },
+    });
+  } catch (err) {
+    console.error('getTeamMap error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load team map' });
   }
 };
