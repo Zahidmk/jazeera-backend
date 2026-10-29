@@ -17,7 +17,7 @@ import { removeUploaded, toStoredPath, resolveStoredPath } from '../utils/privat
 import { pushLeadToOdoo } from './driver.controller';
 
 // A visit started further than this from the shop's recorded location is flagged (not blocked — GPS can be poor).
-const VISIT_RANGE_METERS = 500;
+const VISIT_RANGE_METERS = 100;
 const FEEDBACK_CATEGORIES: string[] = Object.values(FeedbackCategory);
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -510,6 +510,12 @@ export const startVisit = async (req: AuthRequest, res: Response): Promise<void>
     const attendance = await prisma.attendance.findUnique({ where: { openKey: userId }, select: { id: true } });
     const distance = shop.lat != null && shop.lng != null ? haversineMeters(pos.lat, pos.lng, shop.lat, shop.lng) : null;
 
+    if (distance !== null && distance > VISIT_RANGE_METERS) {
+      return void fail(res, 403, `You must be within ${VISIT_RANGE_METERS} m of the shop to start a visit`, {
+        code: 'OUT_OF_RANGE', distanceM: Math.round(distance), rangeM: VISIT_RANGE_METERS,
+      });
+    }
+
     try {
       const visit = await prisma.shopVisit.create({
         data: {
@@ -557,9 +563,23 @@ export const addFeedback = async (req: AuthRequest, res: Response): Promise<void
       if (!Number.isInteger(rating) || rating < 1 || rating > 5) return void fail(res, 400, 'rating must be a whole number from 1 to 5');
     }
 
-    const visit = await prisma.shopVisit.findFirst({ where: { id: req.params.id, merchandiserId: userId } });
+    const pos = parseLatLng(b.latitude, b.longitude);
+    if (!pos) return void fail(res, 400, 'Valid GPS coordinates are required (latitude, longitude)');
+
+    const visit = await prisma.shopVisit.findFirst({
+      where: { id: req.params.id, merchandiserId: userId },
+      include: { customer: { select: { lat: true, lng: true } } },
+    });
     if (!visit) return void fail(res, 404, 'Visit not found');
     if (visit.status !== 'IN_PROGRESS') return void fail(res, 409, 'Feedback can only be added while the visit is in progress');
+
+    const { lat, lng } = visit.customer;
+    const distance = lat != null && lng != null ? haversineMeters(pos.lat, pos.lng, lat, lng) : null;
+    if (distance !== null && distance > VISIT_RANGE_METERS) {
+      return void fail(res, 403, `You must be within ${VISIT_RANGE_METERS} m of the shop to add feedback`, {
+        code: 'OUT_OF_RANGE', distanceM: Math.round(distance), rangeM: VISIT_RANGE_METERS,
+      });
+    }
 
     const feedback = await prisma.shopFeedback.create({
       data: {
