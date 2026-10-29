@@ -287,7 +287,7 @@ export const getOwnSelfie = async (req: AuthRequest, res: Response): Promise<voi
 // SHOPS  (a shop is a Customer record)
 // ═════════════════════════════════════════════════════════════════════════════
 const shopSelect = {
-  id: true, name: true, phone: true, contactPerson: true, shopType: true, notes: true,
+  id: true, name: true, phone: true, contactPerson: true, shopType: true, markerColor: true, notes: true,
   address: true, street: true, district: true, city: true, zip: true, buildingNumber: true,
   lat: true, lng: true, createdById: true, updatedAt: true,
 } as const;
@@ -414,6 +414,12 @@ export function parseShopFields(b: any, partial: boolean): { error: string } | {
   for (const [key, max] of [['contactPerson', 100], ['shopType', 60], ['notes', 1000], ['address', 300], ['street', 150],
     ['district', 100], ['city', 100], ['zip', 20], ['buildingNumber', 30]] as const) {
     if (b[key] !== undefined) data[key] = str(b[key], max);
+  }
+  if (b.markerColor !== undefined) {
+    // Branches of one company share a pin colour; null clears it.
+    const color = str(b.markerColor, 7);
+    if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) return { error: 'markerColor must look like #RRGGBB' };
+    data.markerColor = color ? color.toUpperCase() : null;
   }
   if (!partial || b.latitude !== undefined || b.longitude !== undefined) {
     const pos = parseLatLng(b.latitude, b.longitude);

@@ -175,6 +175,7 @@ model Customer {
   // Shop registration by a Merchandiser (Phase 2) — all optional, untouched by the Odoo sync
   contactPerson  String?
   shopType       String?
+  markerColor    String?
   notes          String?
   createdById    String?
   createdAt      DateTime @default(now())

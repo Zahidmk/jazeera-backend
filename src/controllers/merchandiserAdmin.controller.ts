@@ -185,7 +185,7 @@ export const updateDevice = async (req: AuthRequest, res: Response): Promise<voi
 // SHOPS
 // ═════════════════════════════════════════════════════════════════════════════
 const adminShopSelect = {
-  id: true, odooId: true, name: true, phone: true, contactPerson: true, shopType: true, notes: true,
+  id: true, odooId: true, name: true, phone: true, contactPerson: true, shopType: true, markerColor: true, notes: true,
   address: true, street: true, district: true, city: true, zip: true, buildingNumber: true,
   lat: true, lng: true, createdAt: true, updatedAt: true, createdBy: userBrief,
   _count: { select: { shopVisits: true, feedbacks: true } },

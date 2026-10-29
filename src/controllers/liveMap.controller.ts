@@ -86,7 +86,7 @@ async function buildLiveMap() {
       }),
       prisma.customer.findMany({
         where: { createdBy: { role: 'MERCHANDISER' }, lat: { not: null }, lng: { not: null } },
-        select: { id: true, name: true, lat: true, lng: true, shopType: true, city: true },
+        select: { id: true, name: true, lat: true, lng: true, shopType: true, markerColor: true, city: true },
         orderBy: { createdAt: 'desc' },
         take: SHOP_LIMIT,
       }),
