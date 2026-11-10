@@ -25,6 +25,7 @@
 
 import prisma from '../utils/prisma';
 import odoo from './odoo/odoo.service';
+import { getPricelistPrices } from './pricelist.service';
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
 const CACHE_TTL_MS = Number(process.env.CUSTOMER_PRICE_CACHE_TTL_MS) || 10 * 60 * 1000; // 10 min
@@ -300,7 +301,7 @@ export async function getCustomerPrice(
 export async function attachCustomerPrices<T extends { id: string }>(
   customerId: string | number | null | undefined,
   items: T[]
-): Promise<(T & { customerPrice?: number; priceSource?: PriceSource; lastSaleDate?: string | null })[]> {
+): Promise<(T & { customerPrice?: number; priceSource?: PriceSource; lastSaleDate?: string | null; pricelistPrice?: number })[]> {
   if (!customerId || items.length === 0) return items;
 
   const prices = await getCustomerPrices(
@@ -308,14 +309,23 @@ export async function attachCustomerPrices<T extends { id: string }>(
     items.map((i) => i.id)
   );
 
+  // Price on the customer's own Odoo pricelist — shown as the list price for that shop
+  const customerOdooId = await resolveCustomerOdooId(customerId);
+  const odooIds = [...prices.values()].map((r) => r.odooId).filter((id): id is number => id != null);
+  const pricelist = customerOdooId
+    ? await getPricelistPrices(customerOdooId, odooIds)
+    : new Map<number, number>();
+
   return items.map((item) => {
     const resolved = prices.get(item.id);
     if (!resolved) return item;
+    const pricelistPrice = resolved.odooId != null ? pricelist.get(resolved.odooId) : undefined;
     return {
       ...item,
       customerPrice: resolved.price,
       priceSource: resolved.priceSource,
       lastSaleDate: resolved.lastSaleDate,
+      ...(pricelistPrice != null ? { pricelistPrice } : {}),
     };
   });
 }
