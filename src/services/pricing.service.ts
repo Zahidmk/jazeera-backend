@@ -48,6 +48,8 @@ export interface ResolvedPrice {
   priceSource: PriceSource;
   /** Date of the sale `price` was taken from (null for LIST) */
   lastSaleDate: string | null;
+  /** True when `listPrice` came from the customer's Odoo pricelist, not the local catalogue */
+  fromPricelist?: boolean;
 }
 
 // ─── Cache ───────────────────────────────────────────────────────────────────
@@ -221,6 +223,27 @@ async function resolvePrices(
     );
   }
 
+  // The customer's own Odoo pricelist is their list price: it is what they are charged when
+  // they have never bought the product, and what a shop price is compared against.
+  const pricelist = await getPricelistPrices(
+    customerOdooId,
+    lookupTargets.map((p) => p.odooId!)
+  );
+  for (const p of lookupTargets) {
+    const plPrice = pricelist.get(p.odooId!);
+    if (plPrice != null) {
+      out.set(p.id, {
+        productId: p.id,
+        odooId: p.odooId,
+        price: plPrice,
+        listPrice: plPrice,
+        priceSource: 'LIST',
+        lastSaleDate: null,
+        fromPricelist: true,
+      });
+    }
+  }
+
   await mapWithConcurrency(lookupTargets, CONCURRENCY, async (p: PriceLookupTarget) => {
     const entry = await lookupLastSalePrice(customerOdooId, p.odooId!);
     if (entry?.price != null) {
@@ -228,7 +251,7 @@ async function resolvePrices(
         productId: p.id,
         odooId: p.odooId,
         price: entry.price,
-        listPrice: p.priceRetail,
+        listPrice: out.get(p.id)?.listPrice ?? p.priceRetail,
         priceSource: 'CUSTOMER_LAST_SALE',
         lastSaleDate: entry.saleDate,
       });
@@ -309,23 +332,17 @@ export async function attachCustomerPrices<T extends { id: string }>(
     items.map((i) => i.id)
   );
 
-  // Price on the customer's own Odoo pricelist — shown as the list price for that shop
-  const customerOdooId = await resolveCustomerOdooId(customerId);
-  const odooIds = [...prices.values()].map((r) => r.odooId).filter((id): id is number => id != null);
-  const pricelist = customerOdooId
-    ? await getPricelistPrices(customerOdooId, odooIds)
-    : new Map<number, number>();
-
   return items.map((item) => {
     const resolved = prices.get(item.id);
     if (!resolved) return item;
-    const pricelistPrice = resolved.odooId != null ? pricelist.get(resolved.odooId) : undefined;
     return {
       ...item,
+      // For this customer the list price is the one on their Odoo pricelist
+      ...('priceRetail' in item ? { priceRetail: resolved.listPrice } : {}),
       customerPrice: resolved.price,
       priceSource: resolved.priceSource,
       lastSaleDate: resolved.lastSaleDate,
-      ...(pricelistPrice != null ? { pricelistPrice } : {}),
+      pricelistPrice: resolved.listPrice,
     };
   });
 }

@@ -268,6 +268,9 @@ export const submitSale = async (req: AuthRequest, res: Response): Promise<void>
           if (resolved?.priceSource === 'CUSTOMER_LAST_SALE') {
             item.unitPrice = resolved.price;
             item.priceSource = 'CUSTOMER_LAST_SALE';
+          } else if (resolved?.fromPricelist) {
+            // Never bought by this shop: charge the price on its own Odoo pricelist
+            item.unitPrice = resolved.price;
           }
         }
       } catch (err: any) {
