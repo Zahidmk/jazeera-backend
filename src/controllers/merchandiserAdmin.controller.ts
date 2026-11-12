@@ -9,12 +9,13 @@ import { FeedbackCategory } from '@prisma/client';
 import prisma from '../utils/prisma';
 import { AuthRequest } from '../types';
 import { riyadhRangeFilter, riyadhDayRange } from '../utils/geo';
+import { ATTENDANCE_ROLES } from '../constants/roles';
 import { fail, str, truthy, pageParams, serializeAttendance, sendSelfie, parseShopFields } from './merchandiser.controller';
 
 const ADMIN_BASE = '/api/v1/admin';
 const FEEDBACK_STATUSES = ['NEW', 'REVIEWED', 'RESOLVED'];
 const FEEDBACK_CATEGORIES: string[] = Object.values(FeedbackCategory);
-const userBrief = { select: { id: true, name: true, email: true, phone: true, isActive: true } };
+const userBrief = { select: { id: true, name: true, email: true, phone: true, isActive: true, role: true } };
 
 // ═════════════════════════════════════════════════════════════════════════════
 // MERCHANDISERS OVERVIEW
@@ -25,9 +26,9 @@ export const getMerchandisers = async (_req: AuthRequest, res: Response): Promis
   try {
     const today = riyadhDayRange(new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10))!;
     const users = await prisma.user.findMany({
-      where: { role: 'MERCHANDISER' },
+      where: { role: { in: ATTENDANCE_ROLES as any[] } },
       select: {
-        id: true, name: true, email: true, phone: true, isActive: true,
+        id: true, name: true, email: true, phone: true, isActive: true, role: true,
         attendances: { where: { checkInAt: { gte: today.start, lt: today.end } }, orderBy: { checkInAt: 'desc' }, take: 1, select: { id: true, checkInAt: true, checkOutAt: true, flagged: true } },
         devices: { select: { id: true, isApproved: true } },
       },
@@ -38,7 +39,7 @@ export const getMerchandisers = async (_req: AuthRequest, res: Response): Promis
     res.json({
       success: true,
       data: users.map((u) => ({
-        id: u.id, name: u.name, email: u.email, phone: u.phone, isActive: u.isActive,
+        id: u.id, name: u.name, email: u.email, phone: u.phone, isActive: u.isActive, role: u.role,
         today: u.attendances[0] ?? null,
         isCheckedIn: !!u.attendances[0] && !u.attendances[0].checkOutAt,
         inVisit: inVisit.has(u.id),
@@ -147,7 +148,7 @@ export const updateAttendance = async (req: AuthRequest, res: Response): Promise
 // GET /api/v1/admin/devices?userId=&pending=true
 export const getDevices = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const where: any = { user: { role: 'MERCHANDISER' } };
+    const where: any = { user: { role: { in: ATTENDANCE_ROLES as any[] } } };
     if (req.query.userId) where.userId = String(req.query.userId);
     if (truthy(req.query.pending)) where.isApproved = false;
     const rows = await prisma.userDevice.findMany({

@@ -12,5 +12,8 @@ export const BACKOFFICE_ROLES = ['ADMIN', 'MANAGER'];
 /** Roles allowed on the Merchandiser mobile API. Deliberately Merchandiser-only: the data is scoped to the caller, so admins use the /admin/* views instead. */
 export const MERCHANDISER_APP_ROLES = ['MERCHANDISER'];
 
-/** Roles allowed on /driver/* and /driver/sales/* (van-sales workflow). Admin/Manager kept for support & testing. */
+/** Roles that clock in/out with selfie + GPS (/api/v1/attendance). */
+export const ATTENDANCE_ROLES = ['MERCHANDISER', 'SALESMAN', 'DRIVER'];
+
+/** Roles allowed on /driver/*and /driver/sales/* (van-sales workflow). Admin/Manager kept for support & testing. */
 export const DRIVER_APP_ROLES = ['DRIVER', 'ADMIN', 'MANAGER'];

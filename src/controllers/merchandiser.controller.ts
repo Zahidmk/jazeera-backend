@@ -141,7 +141,7 @@ export const getAttendanceStatus = async (req: AuthRequest, res: Response): Prom
       success: true,
       data: {
         isCheckedIn: !!open,
-        attendance: open ? serializeAttendance(open) : null,
+        attendance: open ? serializeAttendance(open, req.baseUrl) : null,
         activeVisit: visit,
         devices,
       },
@@ -182,7 +182,7 @@ export const checkIn = async (req: AuthRequest, res: Response): Promise<void> =>
         checkInBiometricMethod: input.method,
       },
     });
-    res.status(201).json({ success: true, data: serializeAttendance(attendance) });
+    res.status(201).json({ success: true, data: serializeAttendance(attendance, req.baseUrl) });
   } catch (err: any) {
     removeUploaded(selfiePath);
     if (err.code === 'P2002') return void fail(res, 409, 'You are already checked in. Check out first.', { code: 'ALREADY_CHECKED_IN' });
@@ -234,7 +234,7 @@ export const checkOut = async (req: AuthRequest, res: Response): Promise<void> =
       return void fail(res, 409, 'You are not checked in', { code: 'NOT_CHECKED_IN' });
     }
     const updated = await prisma.attendance.findUnique({ where: { id: open.id } });
-    res.json({ success: true, data: serializeAttendance(updated) });
+    res.json({ success: true, data: serializeAttendance(updated, req.baseUrl) });
   } catch (err) {
     removeUploaded(selfiePath);
     console.error('checkOut error:', err);
@@ -253,7 +253,7 @@ export const getAttendanceHistory = async (req: AuthRequest, res: Response): Pro
       prisma.attendance.findMany({ where, orderBy: { checkInAt: 'desc' }, skip, take: limit }),
       prisma.attendance.count({ where }),
     ]);
-    res.json({ success: true, data: rows.map((r) => serializeAttendance(r)), meta: { page, limit, total } });
+    res.json({ success: true, data: rows.map((r) => serializeAttendance(r, req.baseUrl)), meta: { page, limit, total } });
   } catch (err) {
     console.error('getAttendanceHistory error:', err);
     fail(res, 500, 'Failed to get attendance history');

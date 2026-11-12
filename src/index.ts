@@ -19,6 +19,7 @@ import odooRoutes from './routes/odoo.routes';
 import salesmanRoutes from './routes/salesman.routes';
 import storekeeperRoutes from './routes/storekeeper.routes';
 import merchandiserRoutes from './routes/merchandiser.routes';
+import attendanceRoutes from './routes/attendance.routes';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -77,6 +78,7 @@ app.use('/api/v1/odoo', odooRoutes);
 app.use('/api/v1/salesman', salesmanRoutes);
 app.use('/api/v1/storekeeper', storekeeperRoutes);
 app.use('/api/v1/merchandiser', merchandiserRoutes);
+app.use('/api/v1/attendance', attendanceRoutes);
 
 // ─── 404 ─────────────────────────────────────────────────────────────────────
 app.use((_req, res) => {
