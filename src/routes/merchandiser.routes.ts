@@ -20,6 +20,7 @@ import {
   endVisit,
   getVisits,
   getVisitById,
+  reportLocation,
 } from '../controllers/merchandiser.controller';
 
 const router = Router();
@@ -42,6 +43,8 @@ router.get('/shops', searchShops);
 router.post('/shops', createShop);
 router.get('/shops/:id', getShopById);
 router.patch('/shops/:id', updateShop);
+
+router.post('/location', reportLocation);
 
 // ── Visits & feedback (static paths before /:id)
 router.post('/visits/start', startVisit);

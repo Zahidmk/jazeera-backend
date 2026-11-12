@@ -203,6 +203,7 @@ export const checkOut = async (req: AuthRequest, res: Response): Promise<void> =
       removeUploaded(selfiePath);
       return void fail(res, 409, 'You are not checked in', { code: 'NOT_CHECKED_IN' });
     }
+    await autoCloseVisitIfFar(userId, input.pos, input.accuracy);
     if (await prisma.shopVisit.findUnique({ where: { openKey: userId }, select: { id: true } })) {
       removeUploaded(selfiePath);
       return void fail(res, 409, 'End your current shop visit before checking out', { code: 'VISIT_IN_PROGRESS' });
@@ -498,6 +499,52 @@ const visitInclude = {
   feedback: { orderBy: { createdAt: 'asc' as const }, select: { id: true, category: true, rating: true, comments: true, followUpRequired: true, status: true, createdAt: true } },
 };
 
+/** A fix worse than this is too vague to prove the user left the shop. */
+const AUTO_CLOSE_MAX_ACCURACY_M = 75;
+
+/**
+ * Closes the user's open visit when `pos` is more than VISIT_RANGE_METERS from its shop —
+ * covers merchandisers who walk away without ending the visit. Returns the closed visit id, or null.
+ */
+export async function autoCloseVisitIfFar(
+  userId: string,
+  pos: { lat: number; lng: number },
+  accuracy?: number | null
+): Promise<string | null> {
+  if (accuracy != null && accuracy > AUTO_CLOSE_MAX_ACCURACY_M) return null;
+  const visit = await prisma.shopVisit.findUnique({
+    where: { openKey: userId },
+    select: { id: true, customer: { select: { lat: true, lng: true } } },
+  });
+  if (!visit || visit.customer.lat == null || visit.customer.lng == null) return null;
+  const distance = haversineMeters(pos.lat, pos.lng, visit.customer.lat, visit.customer.lng);
+  if (distance <= VISIT_RANGE_METERS) return null;
+
+  const result = await prisma.shopVisit.updateMany({
+    where: { id: visit.id, status: 'IN_PROGRESS' },
+    data: {
+      status: 'COMPLETED', openKey: null, endedAt: new Date(), endLat: pos.lat, endLng: pos.lng,
+      notes: `Auto-closed: left the shop range (${Math.round(distance)} m away) without ending the visit`,
+    },
+  });
+  return result.count > 0 ? visit.id : null;
+}
+
+// POST /api/v1/merchandiser/location   { latitude, longitude, accuracy? }
+// Light position report from the app while a visit is open; closes the visit once the user has left the shop.
+export const reportLocation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const pos = parseLatLng(req.body?.latitude, req.body?.longitude);
+    if (!pos) return void fail(res, 400, 'Valid GPS coordinates are required (latitude, longitude)');
+    const acc = req.body?.accuracy !== undefined ? Number(req.body.accuracy) : null;
+    const closedVisitId = await autoCloseVisitIfFar(req.user!.userId, pos, Number.isFinite(acc as number) ? acc : null);
+    res.json({ success: true, data: { autoClosed: !!closedVisitId, visitId: closedVisitId } });
+  } catch (err) {
+    console.error('reportLocation error:', err);
+    fail(res, 500, 'Failed to process location');
+  }
+};
+
 // POST /api/v1/merchandiser/visits/start   { customerId, latitude, longitude }
 export const startVisit = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -510,6 +557,8 @@ export const startVisit = async (req: AuthRequest, res: Response): Promise<void>
     const shop = await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true, lat: true, lng: true } });
     if (!shop) return void fail(res, 404, 'Shop not found');
 
+    // A forgotten visit at another shop is closed automatically once the user is out of its range
+    await autoCloseVisitIfFar(userId, pos);
     const current = await prisma.shopVisit.findUnique({ where: { openKey: userId }, select: { id: true } });
     if (current) return void fail(res, 409, 'You already have a visit in progress', { code: 'VISIT_IN_PROGRESS', visitId: current.id });
 
