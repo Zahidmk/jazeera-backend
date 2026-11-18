@@ -20,7 +20,10 @@ export const searchProducts = async (req: Request, res: Response): Promise<void>
         { barcode: { contains: q as string } },
       ];
     }
-    if (category) where.category = category;
+    // A brand / top-level category also matches its sub-categories ("SWEET HOME" -> "SWEET HOME / KITCHEN TOOLS")
+    if (category) {
+      where.AND = [{ OR: [{ category: category as string }, { category: { startsWith: `${category} / ` } }] }];
+    }
 
     const [products, total] = await Promise.all([
       prisma.product.findMany({
@@ -52,6 +55,28 @@ export const searchProducts = async (req: Request, res: Response): Promise<void>
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: 'Failed to search products' });
+  }
+};
+
+// ─── GET /api/v1/products/categories ─────────────────────────────────────────
+// Top-level categories (brands) with product counts, for the app's filter chips.
+// Odoo categories look like "SWEET HOME / KITCHEN TOOLS"; the part before the first " / " is the group.
+export const getProductCategories = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const rows = await prisma.product.groupBy({ by: ['category'], where: { isActive: true }, _count: { _all: true } });
+    const groups = new Map<string, number>();
+    for (const r of rows) {
+      const top = (r.category || '').split(' / ')[0].trim();
+      if (!top) continue;
+      groups.set(top, (groups.get(top) ?? 0) + r._count._all);
+    }
+    const data = [...groups.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Failed to load categories' });
   }
 };
 

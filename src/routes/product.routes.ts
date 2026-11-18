@@ -5,9 +5,13 @@ import {
   searchProducts,
   getProductCustomerPrice,
   getProductCustomerPrices,
+  getProductCategories,
 } from '../controllers/product.controller';
 
 const router = Router();
+
+// GET /api/v1/products/categories
+router.get('/categories', authenticate, requireCheckIn, getProductCategories);
 
 // GET /api/v1/products/search?q=&category=&customerId=
 router.get('/search', authenticate, requireCheckIn, searchProducts);

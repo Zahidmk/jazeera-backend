@@ -657,8 +657,9 @@ export const getProducts = async (req: AuthRequest, res: Response): Promise<void
         { barcode: { contains: searchQuery } },
       ];
     }
+    // A brand / top-level category also matches its sub-categories
     if (category) {
-      where.category = category as string;
+      where.AND = [{ OR: [{ category: category as string }, { category: { startsWith: `${category} / ` } }] }];
     }
 
     const [products, total] = await Promise.all([
