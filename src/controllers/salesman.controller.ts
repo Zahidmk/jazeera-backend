@@ -587,7 +587,8 @@ export const getCustomers = async (req: AuthRequest, res: Response): Promise<voi
     const skip = (pageNum - 1) * limitNum;
     const take = limitNum;
 
-    const where: any = {};
+    // Shops a merchandiser registered stay out of the customer list until they are approved into Odoo
+    const where: any = { NOT: { createdBy: { role: 'MERCHANDISER' }, odooId: null } };
     if (searchQuery) {
       where.OR = [
         { name: { contains: searchQuery, mode: 'insensitive' } },

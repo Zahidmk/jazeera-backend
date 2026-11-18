@@ -42,7 +42,26 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
   }
 };
 
-export const authorizeRoles = (...roles: string[]) => {
+/**
+ * Salesmen may only work while checked in (an open attendance record). Other roles pass through,
+ * so managers and admins keep using the same routes for support.
+ */
+export const requireCheckIn = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  if (req.user?.role !== 'SALESMAN') return next();
+  try {
+    const open = await prisma.attendance.findUnique({ where: { openKey: req.user.userId }, select: { id: true } });
+    if (!open) {
+      res.status(403).json({ success: false, error: 'Check in first to use this feature', code: 'NOT_CHECKED_IN' });
+      return;
+    }
+    next();
+  } catch (err) {
+    console.error('Check-in lookup failed:', err);
+    res.status(500).json({ success: false, error: 'Attendance check failed' });
+  }
+};
+
+export const authorizeRoles =(...roles: string[]) => {
   return (req: AuthRequest, res: Response, next: NextFunction): void => {
     if (!req.user || !roles.includes(req.user.role)) {
       res.status(403).json({ success: false, error: 'Forbidden: Insufficient permissions' });

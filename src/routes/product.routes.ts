@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware/auth';
+import { authenticate, requireCheckIn } from '../middleware/auth';
 import { validate, customerPriceRules, customerPricesBatchRules } from '../middleware/validators';
 import {
   searchProducts,
@@ -10,12 +10,12 @@ import {
 const router = Router();
 
 // GET /api/v1/products/search?q=&category=&customerId=
-router.get('/search', authenticate, searchProducts);
+router.get('/search', authenticate, requireCheckIn, searchProducts);
 
 // POST /api/v1/products/prices  { customerId, productIds: [] }
-router.post('/prices', authenticate, customerPricesBatchRules, validate, getProductCustomerPrices);
+router.post('/prices', authenticate, requireCheckIn, customerPricesBatchRules, validate, getProductCustomerPrices);
 
 // GET /api/v1/products/:productId/price?customerId=
-router.get('/:productId/price', authenticate, customerPriceRules, validate, getProductCustomerPrice);
+router.get('/:productId/price', authenticate, requireCheckIn, customerPriceRules, validate, getProductCustomerPrice);
 
 export default router;

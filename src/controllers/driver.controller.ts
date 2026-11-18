@@ -631,16 +631,20 @@ export const searchCustomers = async (req: AuthRequest, res: Response): Promise<
   try {
     const q = String(req.query.q || '').trim();
 
+    // Shops a merchandiser registered stay out of the list until they are approved into Odoo
     const customers = await prisma.customer.findMany({
-      where: q
-        ? {
-          OR: [
-            { name: { contains: q, mode: 'insensitive' } },
-            { phone: { contains: q, mode: 'insensitive' } },
-            { address: { contains: q, mode: 'insensitive' } },
-          ],
-        }
-        : undefined,
+      where: {
+        NOT: { createdBy: { role: 'MERCHANDISER' }, odooId: null },
+        ...(q
+          ? {
+            OR: [
+              { name: { contains: q, mode: 'insensitive' } },
+              { phone: { contains: q, mode: 'insensitive' } },
+              { address: { contains: q, mode: 'insensitive' } },
+            ],
+          }
+          : {}),
+      },
       select: { id: true, name: true, phone: true, address: true },
       orderBy: { name: 'asc' },
       take: 30,
