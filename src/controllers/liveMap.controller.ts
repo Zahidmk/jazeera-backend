@@ -10,8 +10,12 @@ import { Response } from 'express';
 import prisma from '../utils/prisma';
 import { AuthRequest } from '../types';
 import { riyadhDayRange } from '../utils/geo';
+import { getLivePosition } from '../utils/livePositions';
 
-type PositionSource = 'CHECK_IN' | 'CHECK_OUT' | 'VISIT_START' | 'VISIT_END' | 'SALE';
+type PositionSource = 'CHECK_IN' | 'CHECK_OUT' | 'VISIT_START' | 'VISIT_END' | 'SALE' | 'LIVE';
+
+/** A phone-reported position older than this is no longer shown as live. */
+const LIVE_MAX_AGE_MS = 10 * 60 * 1000;
 
 interface LastKnown {
   at: Date;
@@ -158,6 +162,15 @@ async function buildLiveMap() {
         last = openVisit
           ? { at: openVisit.startedAt, lat: openVisit.startLat, lng: openVisit.startLng, source: 'VISIT_START', detail: openVisit.customer.name }
           : { at: openAtt!.checkInAt, lat: openAtt!.checkInLat, lng: openAtt!.checkInLng, source: 'CHECK_IN', detail: null };
+      }
+
+      // A phone report newer than the last recorded event wins, but only while the person is
+      // checked in today and the report is fresh (otherwise it would show a stale "live" dot).
+      if (status === 'IN_VISIT' || status === 'ON_DUTY') {
+        const live = getLivePosition(u.id, LIVE_MAX_AGE_MS);
+        if (live && (!last || live.at > last.at)) {
+          last = { at: live.at, lat: live.lat, lng: live.lng, source: 'LIVE', detail: last?.detail ?? null };
+        }
       }
 
       return {

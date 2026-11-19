@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, authorizeRoles } from '../middleware/auth';
+import { authenticate, authorizeRoles, requireCheckIn } from '../middleware/auth';
 import { DRIVER_APP_ROLES } from '../constants/roles';
 import {
   getHome,
@@ -30,6 +30,11 @@ const router = Router();
 
 // All driver routes require authentication and a driver-app role
 router.use(authenticate);
+
+// Customer search is also used by the salesman's New Quotation screen, so it sits before the
+// driver-only gate below. Salesmen must be checked in (requireCheckIn passes other roles through).
+router.get('/customers/search', authorizeRoles('SALESMAN', ...DRIVER_APP_ROLES), requireCheckIn, searchCustomers);
+
 router.use(authorizeRoles(...DRIVER_APP_ROLES));
 
 // Home & Route
@@ -53,9 +58,6 @@ router.get('/van/inventory', getVanInventory);
 
 // Leads
 router.post('/leads', addLeadRules, validate, addLead);
-
-// Customers search (for cash sale customer picker)
-router.get('/customers/search', searchCustomers);
 
 // Shift
 router.post('/shift/start', startShift);

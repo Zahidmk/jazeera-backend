@@ -15,6 +15,7 @@ import { AuthRequest } from '../types';
 import { parseLatLng, parseOptionalNumber, haversineMeters, boundingBox, riyadhRangeFilter } from '../utils/geo';
 import { removeUploaded, toStoredPath, resolveStoredPath } from '../utils/privateUpload';
 import { pushLeadToOdoo } from './driver.controller';
+import { recordLivePosition } from '../utils/livePositions';
 
 // A visit started further than this from the shop's recorded location is flagged (not blocked — GPS can be poor).
 const VISIT_RANGE_METERS = 100;
@@ -537,6 +538,10 @@ export const reportLocation = async (req: AuthRequest, res: Response): Promise<v
     const pos = parseLatLng(req.body?.latitude, req.body?.longitude);
     if (!pos) return void fail(res, 400, 'Valid GPS coordinates are required (latitude, longitude)');
     const acc = req.body?.accuracy !== undefined ? Number(req.body.accuracy) : null;
+    // Feeds the live team map. Imprecise fixes (cell-tower guesses) are not worth showing.
+    if (acc == null || !Number.isFinite(acc) || acc <= 150) {
+      recordLivePosition(req.user!.userId, pos.lat, pos.lng, Number.isFinite(acc as number) ? acc : null);
+    }
     const closedVisitId = await autoCloseVisitIfFar(req.user!.userId, pos, Number.isFinite(acc as number) ? acc : null);
     res.json({ success: true, data: { autoClosed: !!closedVisitId, visitId: closedVisitId } });
   } catch (err) {
