@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticate, authorizeRoles } from '../middleware/auth';
 import { MERCHANDISER_APP_ROLES } from '../constants/roles';
 import { getTeamMap } from '../controllers/liveMap.controller';
+import { getRoute } from '../controllers/route.controller';
 import { selfieUpload } from '../utils/privateUpload';
 import {
   getAttendanceStatus,
@@ -45,6 +46,7 @@ router.get('/shops/:id', getShopById);
 router.patch('/shops/:id', updateShop);
 
 router.post('/location', reportLocation);
+router.post('/route', getRoute);
 
 // ── Visits & feedback (static paths before /:id)
 router.post('/visits/start', startVisit);
