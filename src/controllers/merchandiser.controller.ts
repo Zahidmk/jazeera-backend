@@ -294,6 +294,9 @@ const shopSelect = {
   lat: true, lng: true, createdById: true, updatedAt: true,
 } as const;
 
+/** Merchandisers work only with shops merchandisers registered; Odoo customers are not shown to them. */
+const MERCHANDISER_SHOPS = { createdBy: { role: 'MERCHANDISER' } } as const;
+
 const toShop = (s: any, userId: string, origin?: { lat: number; lng: number } | null) => {
   const { createdById, ...rest } = s;
   return {
@@ -311,6 +314,7 @@ export const searchShops = async (req: AuthRequest, res: Response): Promise<void
     const origin = parseLatLng(req.query.lat, req.query.lng);
     const where: any = q
       ? {
+          ...MERCHANDISER_SHOPS,
           OR: [
             { name: { contains: q, mode: 'insensitive' } },
             { phone: { contains: q } },
@@ -320,7 +324,7 @@ export const searchShops = async (req: AuthRequest, res: Response): Promise<void
             { district: { contains: q, mode: 'insensitive' } },
           ],
         }
-      : {};
+      : { ...MERCHANDISER_SHOPS };
     const [rows, total] = await Promise.all([
       prisma.customer.findMany({ where, select: shopSelect, orderBy: { name: 'asc' }, skip, take: limit }),
       prisma.customer.count({ where }),
@@ -344,6 +348,7 @@ export const getNearbyShops = async (req: AuthRequest, res: Response): Promise<v
 
     const candidates = await prisma.customer.findMany({
       where: {
+        ...MERCHANDISER_SHOPS,
         lat: { gte: box.minLat, lte: box.maxLat },
         lng: { gte: box.minLng, lte: box.maxLng },
         ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { phone: { contains: q } }] } : {}),
@@ -381,7 +386,7 @@ export const getNearbyShops = async (req: AuthRequest, res: Response): Promise<v
 export const getShopById = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.userId;
-    const shop = await prisma.customer.findUnique({ where: { id: req.params.id }, select: shopSelect });
+    const shop = await prisma.customer.findFirst({ where: { id: req.params.id, ...MERCHANDISER_SHOPS }, select: shopSelect });
     if (!shop) return void fail(res, 404, 'Shop not found');
     const [visitCount, recent] = await Promise.all([
       prisma.shopVisit.count({ where: { merchandiserId: userId, customerId: shop.id } }),
@@ -559,7 +564,7 @@ export const startVisit = async (req: AuthRequest, res: Response): Promise<void>
     const pos = parseLatLng(req.body?.latitude, req.body?.longitude);
     if (!pos) return void fail(res, 400, 'Valid GPS coordinates are required (latitude, longitude)');
 
-    const shop = await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true, lat: true, lng: true } });
+    const shop = await prisma.customer.findFirst({ where: { id: customerId, ...MERCHANDISER_SHOPS }, select: { id: true, lat: true, lng: true } });
     if (!shop) return void fail(res, 404, 'Shop not found');
 
     // A forgotten visit at another shop is closed automatically once the user is out of its range
